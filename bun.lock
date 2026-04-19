@@ -47,6 +47,7 @@
         "date-fns": "^4.1.0",
         "embla-carousel-react": "^8.6.0",
         "framer-motion": "^12.23.2",
+        "highlight.js": "^11.11.1",
         "input-otp": "^1.4.2",
         "lucide-react": "^0.525.0",
         "next": "^16.1.1",
@@ -1164,7 +1165,7 @@
 
     "hermes-parser": ["hermes-parser@0.25.1", "https://registry.npmjs.com/hermes-parser/-/hermes-parser-0.25.1.tgz", { "dependencies": { "hermes-estree": "0.25.1" } }, "sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA=="],
 
-    "highlight.js": ["highlight.js@10.7.3", "https://registry.npmjs.com/highlight.js/-/highlight.js-10.7.3.tgz", {}, "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="],
+    "highlight.js": ["highlight.js@11.11.1", "", {}, "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w=="],
 
     "highlightjs-vue": ["highlightjs-vue@1.0.0", "https://registry.npmjs.com/highlightjs-vue/-/highlightjs-vue-1.0.0.tgz", {}, "sha512-PDEfEF102G23vHmPhLyPboFCD+BkMGu+GuJe2d9/eH4FsCwvgBpnc9n0pGE+ffKdph38s6foEZiEjdgHdzp+IA=="],
 
@@ -1926,6 +1927,8 @@
 
     "lowlight/fault": ["fault@1.0.4", "https://registry.npmjs.com/fault/-/fault-1.0.4.tgz", { "dependencies": { "format": "^0.2.0" } }, "sha512-CJ0HCB5tL5fYTEA7ToAq5+kTwd++Borf1/bifxd9iT70QcXr4MRrO3Llf8Ifs70q+SJcGHFtnIE/Nw6giCtECA=="],
 
+    "lowlight/highlight.js": ["highlight.js@10.7.3", "https://registry.npmjs.com/highlight.js/-/highlight.js-10.7.3.tgz", {}, "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="],
+
     "mdast-util-frontmatter/escape-string-regexp": ["escape-string-regexp@5.0.0", "https://registry.npmjs.com/escape-string-regexp/-/escape-string-regexp-5.0.0.tgz", {}, "sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw=="],
 
     "micromatch/picomatch": ["picomatch@2.3.1", "https://registry.npmjs.com/picomatch/-/picomatch-2.3.1.tgz", {}, "sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA=="],
@@ -1937,6 +1940,8 @@
     "parse-entities/@types/unist": ["@types/unist@2.0.11", "https://registry.npmjs.com/@types/unist/-/unist-2.0.11.tgz", {}, "sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA=="],
 
     "prop-types/react-is": ["react-is@16.13.1", "https://registry.npmjs.com/react-is/-/react-is-16.13.1.tgz", {}, "sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ=="],
+
+    "react-syntax-highlighter/highlight.js": ["highlight.js@10.7.3", "https://registry.npmjs.com/highlight.js/-/highlight.js-10.7.3.tgz", {}, "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A=="],
 
     "refractor/parse-entities": ["parse-entities@2.0.0", "https://registry.npmjs.com/parse-entities/-/parse-entities-2.0.0.tgz", { "dependencies": { "character-entities": "^1.0.0", "character-entities-legacy": "^1.0.0", "character-reference-invalid": "^1.0.0", "is-alphanumerical": "^1.0.0", "is-decimal": "^1.0.0", "is-hexadecimal": "^1.0.0" } }, "sha512-kkywGpCcRYhqQIchaWqZ875wzpS/bMKhz5HnN3p7wveJTkTtyAB/AlnS0f8DFSqYW1T82t6yEAkEcB+A1I3MbQ=="],
 
