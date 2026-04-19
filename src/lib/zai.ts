@@ -2,78 +2,80 @@ import ZAI from 'z-ai-web-dev-sdk';
 import fs from 'fs';
 import path from 'path';
 
-let zaiInstance: Awaited<ReturnType<typeof ZAI.create>> | null = null;
+let zaiInstance: ZAI | null = null;
 
 /**
- * Ensures .z-ai-config exists by generating it from environment variables
- * if not already present on disk. Supports two deployment modes:
+ * Loads Z.ai config from environment variables or file system.
  *
- * 1. Internal/Z.ai Platform mode (default): uses the internal gateway
- *    with X-Token auth. Config is already at /etc/.z-ai-config.
+ * On Vercel (read-only filesystem): uses ZAI_API_KEY env var directly,
+ * constructs ZAI instance via constructor — NO file writes needed.
  *
- * 2. Public/Vercel mode: uses the public Z.ai API at api.z.ai with
- *    a personal API key. Set ZAI_API_KEY env var on Vercel.
+ * On Z.ai platform sandbox: reads /etc/.z-ai-config (already exists).
  */
-function ensureConfig() {
-  const configPath = path.join(process.cwd(), '.z-ai-config');
-
-  // If config already exists and is valid, nothing to do
-  if (fs.existsSync(configPath)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      if (existing.baseUrl && existing.apiKey) return;
-    } catch {
-      // Invalid config, will regenerate
-    }
-  }
-
-  // ── Public mode: use Z.ai public API with personal API key ──
-  // Set ZAI_API_KEY = your key from https://z.ai/manage-apikey/apikey-list
+function loadConfigFromEnv(): Record<string, string> | null {
   const apiKey = process.env.ZAI_API_KEY;
-  if (apiKey) {
-    const baseUrl = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
-    const chatId = process.env.ZAI_CHAT_ID;
-    const userId = process.env.ZAI_USER_ID;
-    const token = process.env.ZAI_TOKEN;
+  if (!apiKey) return null;
 
-    const config: Record<string, string> = { baseUrl, apiKey };
-    if (chatId) config.chatId = chatId;
-    if (userId) config.userId = userId;
-    if (token) config.token = token;
-
-    try {
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-      console.log('[z-ai] Config generated from ZAI_API_KEY env var (public mode)');
-    } catch (err) {
-      console.error('[z-ai] Failed to write config:', err);
-    }
-    return;
-  }
-
-  // ── Internal mode: check if /etc/.z-ai-config exists (Z.ai platform sandbox) ──
-  const internalPath = '/etc/.z-ai-config';
-  if (fs.existsSync(internalPath)) {
-    try {
-      const internalConfig = JSON.parse(fs.readFileSync(internalPath, 'utf-8'));
-      if (internalConfig.baseUrl && internalConfig.apiKey) {
-        fs.writeFileSync(configPath, JSON.stringify(internalConfig, null, 2), 'utf-8');
-        console.log('[z-ai] Config copied from /etc/.z-ai-config (internal mode)');
-        return;
-      }
-    } catch {
-      // fallthrough
-    }
-  }
-
-  console.warn('[z-ai] No .z-ai-config found and no ZAI_API_KEY env var set. AI features will not work.');
-  console.warn('[z-ai] Get an API key at: https://z.ai/manage-apikey/apikey-list');
+  const baseUrl = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
+  const config: Record<string, string> = { baseUrl, apiKey };
+  if (process.env.ZAI_CHAT_ID) config.chatId = process.env.ZAI_CHAT_ID;
+  if (process.env.ZAI_USER_ID) config.userId = process.env.ZAI_USER_ID;
+  if (process.env.ZAI_TOKEN) config.token = process.env.ZAI_TOKEN;
+  return config;
 }
 
-export async function getZAI() {
+function loadConfigFromFile(): Record<string, string> | null {
+  const configPaths = [
+    path.join(process.cwd(), '.z-ai-config'),
+    path.join(require('os').homedir(), '.z-ai-config'),
+    '/etc/.z-ai-config',
+  ];
+
+  for (const filePath of configPaths) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const config = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (config.baseUrl && config.apiKey) return config;
+      }
+    } catch {
+      // continue to next path
+    }
+  }
+  return null;
+}
+
+/**
+ * Get a ZAI SDK instance. Works in both Vercel and local/sandbox environments.
+ *
+ * Priority:
+ *  1. Environment variables (ZAI_API_KEY) — for Vercel deployment
+ *  2. Config files (.z-ai-config) — for local/sandbox development
+ */
+export async function getZAI(): Promise<ZAI> {
   if (!zaiInstance) {
-    // Ensure config exists before initializing SDK
-    ensureConfig();
-    zaiInstance = await ZAI.create();
+    // Try env vars first (works on Vercel — no filesystem writes)
+    const envConfig = loadConfigFromEnv();
+    if (envConfig) {
+      console.log('[z-ai] Using config from environment variables');
+      // Use constructor directly — bypasses loadConfig() file read
+      zaiInstance = new ZAI(envConfig);
+      return zaiInstance;
+    }
+
+    // Try config files (works in local/sandbox)
+    const fileConfig = loadConfigFromFile();
+    if (fileConfig) {
+      console.log('[z-ai] Using config from file');
+      zaiInstance = new ZAI(fileConfig);
+      return zaiInstance;
+    }
+
+    // Neither worked — provide helpful error
+    throw new Error(
+      '[z-ai] No configuration found. Either:\n' +
+      '  1. Set ZAI_API_KEY env var (get one at https://z.ai/manage-apikey/apikey-list)\n' +
+      '  2. Create .z-ai-config file in project root'
+    );
   }
   return zaiInstance;
 }
