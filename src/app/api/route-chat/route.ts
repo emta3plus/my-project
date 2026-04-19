@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
       max_tokens: 30,
     });
 
-    let rawRoute = (completion.choices[0]?.message?.content || 'general').trim().toLowerCase();
+    let rawRoute = (completion?.choices?.[0]?.message?.content || 'general').trim().toLowerCase();
 
     // Clean up the response — extract just the ID
     rawRoute = rawRoute.replace(/^["'`]+|["'`]+$/g, '').replace(/^(skill:|agent:)/, '');

@@ -11,7 +11,16 @@ export async function POST(req: NextRequest) {
       model: 'glm-4v-plus',
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: img } }] }],
     });
-    return NextResponse.json({ description: completion.choices[0]?.message?.content || '' });
+    
+    // Guard against unexpected response formats
+    const content = completion?.choices?.[0]?.message?.content;
+    if (!content && (completion as Record<string, unknown>)?.error) {
+      return NextResponse.json({ 
+        error: `Vision API error: ${JSON.stringify((completion as Record<string, Record<string, unknown>>).error)}` 
+      }, { status: 500 });
+    }
+    
+    return NextResponse.json({ description: content || '' });
   } catch (e: unknown) {
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Vision failed' }, { status: 500 });
   }

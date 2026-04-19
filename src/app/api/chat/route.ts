@@ -94,12 +94,27 @@ export async function POST(req: NextRequest) {
         sse(controller, { status: 'generating', content: '', done: false });
 
         const zai = await getZAI();
-        const completion = await zai.chat.completions.create({
-          messages: apiMessages,
-          temperature: 0.7,
-          max_tokens: 8192,
-          stream: true,
-        });
+        let completion: AsyncIterable<unknown> | NodeJS.ReadableStream | null = null;
+        try {
+          completion = await zai.chat.completions.create({
+            messages: apiMessages,
+            temperature: 0.7,
+            max_tokens: 8192,
+            stream: true,
+          });
+        } catch (apiErr) {
+          // API init failed (e.g. auth error) — send error to client
+          const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
+          sse(controller, { error: errMsg, done: true });
+          controller.close();
+          return;
+        }
+
+        if (!completion) {
+          sse(controller, { error: 'No response from API', done: true });
+          controller.close();
+          return;
+        }
 
         let sseBuffer = '';
         let lastKeepalive = Date.now();
@@ -285,7 +300,7 @@ Rules:
       max_tokens: 30,
     });
 
-    let rawRoute = (completion.choices[0]?.message?.content || 'general').trim().toLowerCase();
+    let rawRoute = (completion?.choices?.[0]?.message?.content || 'general').trim().toLowerCase();
     rawRoute = rawRoute.replace(/^["'`]+|["'`]+$/g, '');
 
     const isSkill = SKILLS.some((s) => s.id === rawRoute);
