@@ -314,6 +314,7 @@ async function saveMessages(
   skillName?: string | null,
 ) {
   try {
+    if (!db) return; // No database available (e.g. Vercel without DB)
     const last = messages[messages.length - 1];
     await db.message.create({
       data: { conversationId, role: last.role, content: last.content, skill: skillName || null },

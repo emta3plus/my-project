@@ -84,7 +84,7 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
-    (async () => { try { const r = await fetch('/api/skills'); const d = await r.json(); if (r.ok && d.conversations) setConversations(d.conversations); } catch {} })();
+    (async () => { try { const r = await fetch('/api/skills'); const d = await r.json(); if (r.ok && Array.isArray(d.conversations)) setConversations(d.conversations); } catch {} })();
   }, [setConversations]);
 
   const createNewChat = async () => {
