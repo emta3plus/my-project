@@ -8,6 +8,11 @@ import { AGENTS } from '@/lib/agents';
 export const maxDuration = 120;
 export const dynamic = 'force-dynamic';
 
+// Helper: check if a value is async iterable (stream)
+function isAsyncIterable(obj: unknown): obj is AsyncIterable<unknown> {
+  return obj != null && typeof (obj as Record<string, unknown>)[Symbol.asyncIterator] === 'function';
+}
+
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
 
@@ -94,7 +99,7 @@ export async function POST(req: NextRequest) {
         sse(controller, { status: 'generating', content: '', done: false });
 
         const zai = await getZAI();
-        let completion: AsyncIterable<unknown> | NodeJS.ReadableStream | null = null;
+        let completion: unknown = null;
         try {
           completion = await zai.chat.completions.create({
             messages: apiMessages,
@@ -116,10 +121,30 @@ export async function POST(req: NextRequest) {
           return;
         }
 
+        // Handle non-streaming response (public API may return JSON instead of stream)
+        if (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream)) {
+          const resp = completion as Record<string, unknown>;
+          // Check if it's an error response
+          if (resp.error) {
+            sse(controller, { error: `API error: ${JSON.stringify(resp.error)}`, done: true });
+            controller.close();
+            return;
+          }
+          // It's a valid non-streaming completion — send content directly
+          const content = (resp.choices as Array<{message?: {content?: string}}>)?.[0]?.message?.content || '';
+          fullContent = content;
+          if (conversationId && fullContent) {
+            saveMessages(conversationId, messages, fullContent, skill || agent).catch(() => {});
+          }
+          sse(controller, { content, done: true, usage: resp.usage as Record<string, number> | undefined });
+          controller.close();
+          return;
+        }
+
         let sseBuffer = '';
         let lastKeepalive = Date.now();
 
-        for await (const chunk of completion) {
+        for await (const chunk of completion as AsyncIterable<unknown>) {
           let text: string;
           if (typeof chunk === 'string') {
             text = chunk;
