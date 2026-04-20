@@ -484,12 +484,14 @@ export async function POST(req: NextRequest) {
 
           // Provide user-friendly error messages
           let userMsg = errMsg;
-          if (errMsg.includes('Rate limit exceeded') || errMsg.includes('free-models-per-day')) {
-            userMsg = '⏰ Daily free model limit reached (50 requests/day for free accounts). To fix this:\n\n1. Add $5+ credits at https://openrouter.ai/settings/credits → unlocks 1000 free requests/day\n2. Or wait until midnight UTC for the limit to reset\n3. Or set OPENROUTER_MODEL to a cheap paid model like "z-ai/glm-4.7-flash" ($0.06/1M tokens)';
+          if (errMsg.includes('All providers exhausted') || errMsg.includes('All') && errMsg.includes('free models are currently busy')) {
+            userMsg = '🔄 All AI providers are currently busy or rate-limited.\n\nTo get UNLIMITED free access, add these FREE API keys on Vercel:\n\n1. GEMINI_API_KEY — FREE, 1500 requests/day!\n   Get it at: https://aistudio.google.com/apikey\n   (Just sign in with Google, click "Create API Key")\n\n2. GROQ_API_KEY — FREE, ultra-fast!\n   Get it at: https://console.groq.com/keys\n\nWith Gemini + Groq added, you will never run out of free requests!';
+          } else if (errMsg.includes('Rate limit exceeded') || errMsg.includes('free-models-per-day')) {
+            userMsg = '⏰ OpenRouter daily free limit reached (50 req/day).\n\nFix: Add GEMINI_API_KEY on Vercel for FREE unlimited access!\nGet it at: https://aistudio.google.com/apikey\n\nOr add $5 credits at https://openrouter.ai/settings/credits for 1000 free req/day.';
           } else if (errMsg.includes('Insufficient credits') || errMsg.includes('402')) {
-            userMsg = '💳 Credits required. Add credits at https://openrouter.ai/settings/credits to use paid models. Free models have a 50 requests/day limit.';
-          } else if (errMsg.includes('All') && errMsg.includes('free models are currently busy')) {
-            userMsg = '🔄 All free models are temporarily busy. Try again in 30 seconds, or add credits at https://openrouter.ai/settings/credits for reliable access to paid models.';
+            userMsg = '💳 Credits required for paid models. Add GEMINI_API_KEY on Vercel for FREE access (1500 req/day)!\nGet it at: https://aistudio.google.com/apikey';
+          } else if (errMsg.includes('No AI providers configured')) {
+            userMsg = '⚠️ No AI providers configured. Add at least one FREE API key on Vercel:\n\n• GEMINI_API_KEY — FREE, 1500 req/day → https://aistudio.google.com/apikey\n• OPENROUTER_API_KEY — Free → https://openrouter.ai/keys\n• GROQ_API_KEY — FREE, fast → https://console.groq.com/keys';
           }
 
           sse(controller, { error: userMsg, done: true });
