@@ -481,7 +481,18 @@ export async function POST(req: NextRequest) {
         } catch (apiErr) {
           const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
           console.error(`[Chat] API error: ${errMsg}`);
-          sse(controller, { error: `[${ai.providerName}/${ai.modelName}] ${errMsg}`, done: true });
+
+          // Provide user-friendly error messages
+          let userMsg = errMsg;
+          if (errMsg.includes('Rate limit exceeded') || errMsg.includes('free-models-per-day')) {
+            userMsg = '⏰ Daily free model limit reached (50 requests/day for free accounts). To fix this:\n\n1. Add $5+ credits at https://openrouter.ai/settings/credits → unlocks 1000 free requests/day\n2. Or wait until midnight UTC for the limit to reset\n3. Or set OPENROUTER_MODEL to a cheap paid model like "z-ai/glm-4.7-flash" ($0.06/1M tokens)';
+          } else if (errMsg.includes('Insufficient credits') || errMsg.includes('402')) {
+            userMsg = '💳 Credits required. Add credits at https://openrouter.ai/settings/credits to use paid models. Free models have a 50 requests/day limit.';
+          } else if (errMsg.includes('All') && errMsg.includes('free models are currently busy')) {
+            userMsg = '🔄 All free models are temporarily busy. Try again in 30 seconds, or add credits at https://openrouter.ai/settings/credits for reliable access to paid models.';
+          }
+
+          sse(controller, { error: userMsg, done: true });
           controller.close();
           return;
         }
