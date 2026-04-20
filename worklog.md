@@ -81,3 +81,34 @@ Stage Summary:
 - Non-coding tasks use openrouter/free for general chat
 - Auto-routing expanded from 7 to 20+ keyword patterns including language detection
 - Each skill has detailed instruction block for production-quality output
+
+---
+Task ID: 2
+Agent: Main Agent
+Task: Fix AI giving truncated/stupid code responses - compact system prompt and increase max_tokens
+
+Work Log:
+- Analyzed screenshot: AI was generating long text but code preview only showed "cd" (3 lines, 107 chars)
+- Root cause: System prompt was HUGE (full 227 skills + 47 agents catalog listing) consuming most of the context window
+- Free models have limited context windows, and the massive system prompt left very little room for output tokens
+- max_tokens was set to 4096 in openAICompatChat default, and 8192 in route.ts
+- Skill/agent content was being injected at 8000 chars each, further bloating the prompt
+
+Fixes applied:
+- Rewrote buildSystemPrompt() to use COMPACT format: category counts instead of full skill listings
+  - Before: Every skill name + ID listed = thousands of tokens
+  - After: "development(50), devops(15), data(10)..." = ~100 tokens
+- Only top 20 skill names are listed by ID (most commonly requested ones)
+- Base prompt reduced from ~30 lines of verbose rules to 8 lines of concise rules
+- Added explicit rule: "Show FULL code blocks, not snippets. Never cut off mid-code."
+- Added: "When code is long, use multiple code blocks instead of truncating."
+- Increased max_tokens: 4096 → 16384 in openAICompatChat, 8192 → 16384 in route.ts
+- Reduced skill content injection limit: 8000 → 4000 chars
+- Reduced agent content injection limit: 8000 → 4000 chars
+- Built and pushed to GitHub (commit 12718b7)
+
+Stage Summary:
+- System prompt now ~10x smaller, leaving much more room for the AI's response
+- max_tokens increased to 16384 so the AI can write complete code
+- Explicit instructions to never truncate code
+- Vercel auto-deploy triggered
