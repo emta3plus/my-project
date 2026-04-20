@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
         sse(controller, { status: 'generating', content: '', done: false });
 
         const ai = await AIClient.create();
+        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}`);
         let completion: unknown = null;
         try {
           completion = await ai.chat({
@@ -110,7 +111,7 @@ export async function POST(req: NextRequest) {
         } catch (apiErr) {
           // API init failed (e.g. auth error) — send error to client
           const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
-          sse(controller, { error: errMsg, done: true });
+          sse(controller, { error: `[${ai.providerName}/${ai.modelName}] ${errMsg}`, done: true });
           controller.close();
           return;
         }
