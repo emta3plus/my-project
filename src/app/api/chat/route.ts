@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
           completion = await ai.chat({
             messages: apiMessages,
             temperature: 0.7,
-            max_tokens: 8192,
+            max_tokens: 16384,
             stream: true,
           });
         } catch (apiErr) {
@@ -444,62 +444,43 @@ async function saveMessages(
 }
 
 async function buildSystemPrompt(skill?: string, agent?: string): Promise<string> {
-  // ── Build a compact but comprehensive skills/agents catalog ──
-  const skillsByCategory: Record<string, Array<{ id: string; name: string }>> = {};
+  // ── Build a COMPACT skills/agents summary (NOT full listing — saves tokens for response) ──
+  // Count skills per category for a brief overview
+  const skillCounts: Record<string, number> = {};
   for (const s of SKILLS) {
-    if (!skillsByCategory[s.category]) skillsByCategory[s.category] = [];
-    skillsByCategory[s.category].push({ id: s.id, name: s.name });
+    skillCounts[s.category] = (skillCounts[s.category] || 0) + 1;
   }
-
-  const agentsByCategory: Record<string, Array<{ id: string; name: string; desc: string }>> = {};
+  const agentCounts: Record<string, number> = {};
   for (const a of AGENTS) {
-    if (!agentsByCategory[a.category]) agentsByCategory[a.category] = [];
-    agentsByCategory[a.category].push({ id: a.id, name: a.name, desc: a.description });
+    agentCounts[a.category] = (agentCounts[a.category] || 0) + 1;
   }
 
-  // Compact catalog for the system prompt
-  const catalogStr = Object.entries(skillsByCategory)
-    .map(([cat, skills]) => `${cat.toUpperCase()}: ${skills.map(s => `${s.name}(${s.id})`).join(', ')}`)
-    .join('\n');
+  // One-line category summary instead of listing every skill
+  const skillSummary = Object.entries(skillCounts)
+    .map(([cat, count]) => `${cat}(${count})`)
+    .join(', ');
 
-  const agentCatalogStr = Object.entries(agentsByCategory)
-    .map(([cat, agents]) => `${cat.toUpperCase()}: ${agents.map(a => `${a.name}(${a.id})`).join(', ')}`)
-    .join('\n');
+  const agentSummary = Object.entries(agentCounts)
+    .map(([cat, count]) => `${cat}(${count})`)
+    .join(', ');
 
-  const base = `You are Z, a powerful personal AI assistant with expert-level capabilities. You are NOT ChatGPT, NOT OpenAI, NOT GPT, NOT any other AI — you are Z, a unique and capable assistant.
+  // Top skills the AI should know about by name (most commonly requested)
+  const topSkillNames = 'fullstack-dev, python-patterns, rust-patterns, golang-patterns, frontend-patterns, backend-patterns, code-review, tdd, security, architect, writer, researcher, planner, devops, api-design, database-migrations, docker-patterns, e2e-testing, image-generation, web-search';
 
-═══ IDENTITY ═══
-- Name: Z
-- Role: Expert Personal AI Assistant with 227 specialized skills and 47 dedicated agents
-- You are intelligent, thorough, and produce high-quality results
-- You think step-by-step, validate edge cases, and provide production-grade output
+  const base = `You are Z, a powerful personal AI assistant. You are NOT ChatGPT, NOT OpenAI, NOT GPT — you are Z.
 
-═══ CORE RULES ═══
-1. If asked "who are you", always say you are Z, a personal AI assistant
-2. NEVER identify as ChatGPT, OpenAI, GPT, or any other AI company
-3. For CODING tasks: Write clean, well-structured, production-quality code with proper error handling, type safety, and best practices. Include imports, types, and working examples.
-4. For WRITING tasks: Write rich, detailed, engaging content with depth and substance. Each paragraph must be 3-5+ sentences. Never write shallow content.
-5. For RESEARCH tasks: Provide thorough, evidence-based analysis with specific details and actionable recommendations.
-6. Always be thorough — it's better to give a complete, detailed answer than a brief one.
+Identity: Z | Expert AI Assistant | 227 skills | 47 agents
+Skills by category: ${skillSummary}
+Agents by category: ${agentSummary}
+Key skills: ${topSkillNames}
 
-═══ YOUR 227 SKILLS ═══
-You have access to 227 specialized skills across these categories:
-${catalogStr}
-
-═══ YOUR 47 AGENTS ═══
-You have access to 47 specialized agents:
-${agentCatalogStr}
-
-═══ HOW TO USE YOUR CAPABILITIES ═══
-- When a user asks about coding, apply your development skills and patterns expertise
-- When a user asks about architecture, apply system design and scalability knowledge
-- When a user asks about security, apply OWASP Top 10 and vulnerability detection
-- When a user asks about testing, apply TDD methodology and coverage best practices
-- When a user asks about data, apply database optimization and analytics patterns
-- When a user asks about DevOps, apply CI/CD, Docker, and deployment best practices
-- When a user asks about writing, apply content creation and communication skills
-- Always match your expertise to the user's specific domain and technology stack
-- Reference relevant skills by name when they apply to the user's question`;
+Rules:
+- Say "I am Z" if asked who you are. NEVER claim to be ChatGPT/GPT/OpenAI.
+- CODING: Write complete, working code with imports, types, error handling. Show FULL code blocks, not snippets. Never cut off mid-code.
+- WRITING: Rich, detailed content. 3-5+ sentences per paragraph.
+- RESEARCH: Evidence-based analysis with specific details.
+- ALWAYS give COMPLETE answers. If writing code, include the FULL implementation.
+- When code is long, use multiple code blocks instead of truncating.`;
 
   let extra = '';
 
@@ -669,7 +650,7 @@ You are a backend expert. Write scalable, reliable server code:
       try {
         const skillContent = await getSkillContent(skill);
         if (skillContent) {
-          extra += `\n\n[ACTIVE SKILL: ${skill}]\n${skillContent.slice(0, 8000)}`;
+          extra += `\n\n[ACTIVE SKILL: ${skill}]\n${skillContent.slice(0, 4000)}`;
         }
       } catch {
         const skillInfo = SKILLS.find((s) => s.id === skill);
@@ -704,7 +685,7 @@ You are a backend expert. Write scalable, reliable server code:
     try {
       const agentContent = await getAgentContent(agent);
       if (agentContent) {
-        extra += `\n\n[ACTIVE AGENT: ${agent}]\n${agentContent.slice(0, 8000)}`;
+        extra += `\n\n[ACTIVE AGENT: ${agent}]\n${agentContent.slice(0, 4000)}`;
       }
     } catch {
       const agentInfo = AGENTS.find((a) => a.id === agent);

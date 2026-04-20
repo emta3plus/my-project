@@ -112,7 +112,7 @@ async function openAICompatChat(
     model,
     messages: options.messages,
     temperature: options.temperature ?? 0.7,
-    max_tokens: options.max_tokens ?? 4096,
+    max_tokens: options.max_tokens ?? 16384,
     stream: options.stream ?? false,
   });
 
@@ -181,7 +181,7 @@ async function openAICompatVision(
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages: options.messages, max_tokens: 4096 }),
+    body: JSON.stringify({ model, messages: options.messages, max_tokens: 16384 }),
   });
 
   if (!response.ok) {
