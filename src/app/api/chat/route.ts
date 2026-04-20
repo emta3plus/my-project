@@ -257,6 +257,10 @@ async function autoRoute(messages: Array<{ role: string; content: string }>): Pr
     const content = lastUserMsg.content.toLowerCase();
 
     // ── Fast keyword-based shortcuts (no LLM call needed) ──
+    // Simple greetings / casual chat — skip routing entirely
+    if (/^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|howdy|sup|yo|what'?s\s*up|hola)[\s!.?]*$/i.test(content) || content.length < 10 && /^(thanks|thank you|ok|okay|bye|goodbye|sure|yes|no|maybe)[\s!.?]*$/i.test(content)) {
+      return { route: 'general', type: 'none', name: '' };
+    }
     if (/\b(generate|create|draw|make)\b.*\b(image|picture|photo|illustration|artwork)\b/.test(content)) {
       const s = SKILLS.find((s) => s.id === 'image-generation');
       return { route: 'image-generation', type: 'skill', name: s?.name || 'Image Generation' };
