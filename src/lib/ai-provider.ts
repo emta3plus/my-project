@@ -1,18 +1,20 @@
 /**
- * Universal AI Provider — MULTI-PROVIDER free tier system.
+ * Universal AI Provider — Z.ai FIRST, then multi-provider fallback.
  *
- * Providers (in priority order):
- *  1. OpenRouter — 24+ free models (50 req/day free, 1000 with $5 credits)
- *  2. Google Gemini — FREE, 1500 req/day, no credit card needed!
- *  3. Groq — FREE, ultra-fast, 14400 req/day
+ * Priority order:
+ *  1. Z.ai SDK — FREE, unlimited, GLM-4-plus (works in sandbox)
+ *  2. Google Gemini — FREE, 1500 req/day
+ *  3. OpenRouter — 24+ free models (50-1000 req/day)
+ *  4. Groq — FREE, ultra-fast, 14400 req/day
  *
- * Smart fallback: If OpenRouter hits rate limit → auto-switches to Gemini → Groq
- * The user gets essentially UNLIMITED free AI chat across 3 providers!
+ * The Z.ai SDK works in the sandbox environment (internal IP).
+ * On Vercel, it falls back to Gemini → OpenRouter → Groq.
  *
- * API Keys needed (ALL FREE):
- *  - OPENROUTER_API_KEY: https://openrouter.ai/keys
- *  - GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY: https://aistudio.google.com/apikey
- *  - GROQ_API_KEY: https://console.groq.com/keys
+ * API Keys (ALL FREE):
+ *  - Z.ai: Auto-detected from /etc/.z-ai-config (sandbox) or ZAI_API_KEY
+ *  - GEMINI_API_KEY: https://aistudio.google.com/apikey (FREE, 1500/day!)
+ *  - OPENROUTER_API_KEY: https://openrouter.ai/keys (free, 50/day)
+ *  - GROQ_API_KEY: https://console.groq.com/keys (FREE)
  */
 
 // ── Types ──
@@ -33,29 +35,45 @@ export interface ChatCompletionResponse {
   error?: { code?: string; message?: string };
 }
 
-export type AIProvider = 'openrouter' | 'gemini' | 'groq' | 'zai' | 'openai';
+export type AIProvider = 'zai' | 'gemini' | 'openrouter' | 'groq' | 'openai';
 export type ModelHint = 'auto' | 'coder';
 
-// ── Verified free models on OpenRouter (April 2026) ──
+// ── Provider info ──
+export interface ProviderInfo {
+  provider: AIProvider;
+  hasKey: boolean;
+  apiKey: string;
+  baseUrl: string;
+  models: string[];
+}
+
+// ── Free models per provider ──
+const ZAI_MODELS = ['glm-4-plus', 'glm-4-flash', 'glm-4-long'];
+
+const GEMINI_MODELS = [
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+];
+
+const GEMINI_CODER_MODELS = [
+  'gemini-2.5-flash-preview-05-20',
+  'gemini-2.0-flash',
+];
+
 const OPENROUTER_GENERAL_FREE = [
   'z-ai/glm-4.5-air:free',
   'google/gemma-4-31b-it:free',
-  'google/gemma-4-26b-a4b-it:free',
   'qwen/qwen3-coder:free',
   'meta-llama/llama-3.3-70b-instruct:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
-  'nvidia/nemotron-3-nano-30b-a3b:free',
   'openai/gpt-oss-120b:free',
-  'qwen/qwen3-next-80b-a3b-instruct:free',
   'google/gemma-3-27b-it:free',
   'arcee-ai/trinity-large-preview:free',
   'minimax/minimax-m2.5:free',
   'nousresearch/hermes-3-llama-3.1-405b:free',
   'google/gemma-3-12b-it:free',
-  'openai/gpt-oss-20b:free',
   'nvidia/nemotron-nano-9b-v2:free',
-  'google/gemma-3-4b-it:free',
-  'meta-llama/llama-3.2-3b-instruct:free',
 ];
 
 const OPENROUTER_CODER_FREE = [
@@ -64,31 +82,15 @@ const OPENROUTER_CODER_FREE = [
   'google/gemma-4-31b-it:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
   'meta-llama/llama-3.3-70b-instruct:free',
-  'qwen/qwen3-next-80b-a3b-instruct:free',
   'openai/gpt-oss-120b:free',
   'google/gemma-3-27b-it:free',
-  'arcee-ai/trinity-large-preview:free',
-  'nvidia/nemotron-3-nano-30b-a3b:free',
 ];
 
-// ── Google Gemini free models ──
-const GEMINI_MODELS = [
-  'gemini-2.5-flash-preview-05-20',   // Newest, best quality
-  'gemini-2.0-flash',                  // Fast, reliable
-  'gemini-2.0-flash-lite',             // Ultra-fast, lightweight
-];
-
-const GEMINI_CODER_MODELS = [
-  'gemini-2.5-flash-preview-05-20',   // Best for code
-  'gemini-2.0-flash',                  // Fast coding
-];
-
-// ── Groq free models ──
 const GROQ_MODELS = [
-  'llama-3.3-70b-versatile',           // Best Groq model
-  'llama-3.1-8b-instant',              // Ultra-fast
-  'gemma2-9b-it',                       // Good quality
-  'mixtral-8x7b-32768',                // Large context
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'gemma2-9b-it',
+  'mixtral-8x7b-32768',
 ];
 
 const GROQ_CODER_MODELS = [
@@ -97,52 +99,62 @@ const GROQ_CODER_MODELS = [
   'gemma2-9b-it',
 ];
 
-// ── Provider detection ──
-export interface ProviderInfo {
-  provider: AIProvider;
-  hasKey: boolean;
-  apiKey: string;
-  baseUrl: string;
-}
-
-export function detectAllProviders(): ProviderInfo[] {
+// ── Detect all available providers ──
+export function detectAllProviders(hint: ModelHint = 'auto'): ProviderInfo[] {
   const providers: ProviderInfo[] = [];
 
-  // 1. OpenRouter
+  // 1. Z.ai SDK (sandbox or public API)
+  const zaiKey = process.env.ZAI_API_KEY;
+  const zaiBaseUrl = process.env.ZAI_BASE_URL;
+  if (zaiKey && zaiBaseUrl) {
+    // Only use Z.ai if base URL is reachable (internal or public)
+    providers.push({
+      provider: 'zai',
+      hasKey: true,
+      apiKey: zaiKey,
+      baseUrl: zaiBaseUrl,
+      models: ZAI_MODELS,
+    });
+  }
+
+  // 2. Google Gemini (FREE, 1500 req/day!)
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY;
+  if (geminiKey) {
+    providers.push({
+      provider: 'gemini',
+      hasKey: true,
+      apiKey: geminiKey,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      models: hint === 'coder' ? GEMINI_CODER_MODELS : GEMINI_MODELS,
+    });
+  }
+
+  // 3. OpenRouter
   const orKey = process.env.OPENROUTER_API_KEY ||
     (process.env.OPENAI_API_KEY?.startsWith('sk-or-v1-') ? process.env.OPENAI_API_KEY : '');
   if (orKey) {
     if (process.env.OPENAI_API_KEY?.startsWith('sk-or-v1-') && !process.env.OPENROUTER_API_KEY) {
       process.env.OPENROUTER_API_KEY = orKey;
     }
-    providers.push({ provider: 'openrouter', hasKey: true, apiKey: orKey, baseUrl: 'https://openrouter.ai/api/v1' });
+    providers.push({
+      provider: 'openrouter',
+      hasKey: true,
+      apiKey: orKey,
+      baseUrl: 'https://openrouter.ai/api/v1',
+      models: hint === 'coder' ? OPENROUTER_CODER_FREE : OPENROUTER_GENERAL_FREE,
+    });
   }
 
-  // 2. Google Gemini (supports multiple env var names)
-  const geminiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY;
-  if (geminiKey) {
-    providers.push({ provider: 'gemini', hasKey: true, apiKey: geminiKey, baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai' });
-  }
-
-  // 3. Groq
+  // 4. Groq
   const groqKey = process.env.GROQ_API_KEY;
   if (groqKey) {
-    providers.push({ provider: 'groq', hasKey: true, apiKey: groqKey, baseUrl: 'https://api.groq.com/openai/v1' });
-  }
-
-  // 4. OpenAI (for users who have their own key)
-  const openaiKey = process.env.OPENAI_API_KEY;
-  if (openaiKey && !openaiKey.startsWith('sk-or-v1-')) {
-    providers.push({ provider: 'openai', hasKey: true, apiKey: openaiKey, baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1' });
-  }
-
-  // 5. Z.ai sandbox (only works in Z.ai platform)
-  const zaiKey = process.env.ZAI_API_KEY;
-  if (zaiKey) {
-    const zaiBaseUrl = process.env.ZAI_BASE_URL || '';
-    if (zaiBaseUrl.includes('172.') || zaiBaseUrl.includes('localhost') || zaiBaseUrl.includes('127.0.0.1')) {
-      providers.push({ provider: 'zai', hasKey: true, apiKey: zaiKey, baseUrl: zaiBaseUrl });
-    }
+    providers.push({
+      provider: 'groq',
+      hasKey: true,
+      apiKey: groqKey,
+      baseUrl: 'https://api.groq.com/openai/v1',
+      models: hint === 'coder' ? GROQ_CODER_MODELS : GROQ_MODELS,
+    });
   }
 
   return providers;
@@ -155,7 +167,7 @@ export function detectProvider(): { provider: AIProvider; hasKey: boolean } {
   return { provider: 'zai', hasKey: false };
 }
 
-// ── OpenAI-compatible chat (works for OpenRouter, Gemini, Groq) ──
+// ── OpenAI-compatible chat (Gemini, OpenRouter, Groq) ──
 async function openAICompatChat(
   apiKey: string,
   baseUrl: string,
@@ -169,7 +181,6 @@ async function openAICompatChat(
     'Authorization': `Bearer ${apiKey}`,
   };
 
-  // OpenRouter-specific headers
   if (provider === 'openrouter') {
     headers['HTTP-Referer'] = process.env.NEXT_PUBLIC_SITE_URL || 'https://my-project.vercel.app';
     headers['X-Title'] = 'Personal AI System';
@@ -192,11 +203,11 @@ async function openAICompatChat(
 
   if (!response.ok) {
     const errorText = await response.text();
-    let errorMsg = `[${provider}] API error (${response.status})`;
+    let errorMsg = `[${provider}/${model}] API error (${response.status})`;
     let retriable = false;
     try {
       const errorJson = JSON.parse(errorText);
-      errorMsg = `[${provider}] ${errorJson.error?.message || errorJson.message || errorJson.error?.code || errorMsg}`;
+      errorMsg = `[${provider}/${model}] ${errorJson.error?.message || errorJson.message || errorJson.error?.code || errorMsg}`;
       if (response.status === 429 || response.status === 404 || response.status === 503) retriable = true;
       if (response.status === 400 && (errorMsg.includes('location') || errorMsg.includes('not available') || errorMsg.includes('context') || errorMsg.includes('token') || errorMsg.includes('too many'))) retriable = true;
       if (errorMsg.includes('Provider returned error') || errorMsg.includes('No endpoints found') || errorMsg.includes('rate limit') || errorMsg.includes('overloaded') || errorMsg.includes('capacity') || errorMsg.includes('exceeded')) retriable = true;
@@ -254,12 +265,12 @@ async function openAICompatVision(
   return await response.json() as ChatCompletionResponse;
 }
 
-// ── Unified AI Client with MULTI-PROVIDER fallback ──
+// ── Unified AI Client ──
 export class AIClient {
   private providers: ProviderInfo[];
   private zai: InstanceType<typeof import('z-ai-web-dev-sdk').default> | null = null;
-  private currentProvider: AIProvider = 'openrouter';
-  private currentModel = '';
+  private currentProvider: AIProvider = 'zai';
+  private currentModel = 'glm-4-plus';
   private modelHint: ModelHint = 'auto';
 
   private constructor(providers: ProviderInfo[], hint: ModelHint = 'auto') {
@@ -268,95 +279,93 @@ export class AIClient {
   }
 
   static async create(hint: ModelHint = 'auto'): Promise<AIClient> {
-    const providers = detectAllProviders();
+    const providers = detectAllProviders(hint);
     const client = new AIClient(providers, hint);
 
-    if (providers.length === 0) {
+    // Try to init Z.ai SDK first (if available)
+    try {
+      const { getZAI } = await import('@/lib/zai');
+      client.zai = await getZAI();
+      client.currentProvider = 'zai';
+      client.currentModel = 'glm-4-plus';
+      console.log(`[AI Provider] Z.ai SDK initialized (GLM-4-plus, FREE, unlimited)`);
+    } catch {
+      // Z.ai SDK not available (Vercel or no config) — use other providers
+    }
+
+    if (providers.length === 0 && !client.zai) {
       throw new Error(
-        'No AI providers configured! Set at least one of:\n' +
-        '  • GEMINI_API_KEY (FREE — get one at https://aistudio.google.com/apikey)\n' +
-        '  • OPENROUTER_API_KEY (free — https://openrouter.ai/keys)\n' +
-        '  • GROQ_API_KEY (FREE — https://console.groq.com/keys)'
+        'No AI providers configured! Set at least one FREE API key:\n' +
+        '  • GEMINI_API_KEY — FREE, 1500 req/day → https://aistudio.google.com/apikey\n' +
+        '  • OPENROUTER_API_KEY — Free → https://openrouter.ai/keys\n' +
+        '  • GROQ_API_KEY — FREE → https://console.groq.com/keys'
       );
     }
 
-    // Try to init Z.ai SDK if available
-    const zaiProvider = providers.find(p => p.provider === 'zai');
-    if (zaiProvider) {
-      try {
-        const { getZAI } = await import('@/lib/zai');
-        client.zai = await getZAI();
-      } catch {
-        // Z.ai init failed, but other providers are available
-      }
+    // Set initial provider/model (skip Z.ai if SDK already init'd)
+    if (!client.zai && providers.length > 0) {
+      const first = providers[0];
+      client.currentProvider = first.provider;
+      client.currentModel = first.models[0] || 'unknown';
     }
 
-    // Set initial provider/model
-    const first = providers[0];
-    client.currentProvider = first.provider;
-    client.currentModel = client.getDefaultModel(first.provider);
+    const providerList = [
+      client.zai ? 'zai-sdk(GLM-4-plus)' : null,
+      ...providers.filter(p => p.provider !== 'zai').map(p => p.provider),
+    ].filter(Boolean).join(' → ');
 
-    console.log(`[AI Provider] Available: ${providers.map(p => p.provider).join(', ')} | Using: ${client.currentProvider}/${client.currentModel}`);
+    console.log(`[AI Provider] Fallback chain: ${providerList}`);
     return client;
   }
 
-  private getDefaultModel(provider: AIProvider): string {
-    if (process.env.OPENROUTER_MODEL && provider === 'openrouter') return process.env.OPENROUTER_MODEL;
-    const models = this.getModelsForProvider(provider);
-    return models[0] || 'unknown';
-  }
-
-  private getModelsForProvider(provider: AIProvider): string[] {
-    const hint = this.modelHint;
-    switch (provider) {
-      case 'openrouter': return hint === 'coder' ? OPENROUTER_CODER_FREE : OPENROUTER_GENERAL_FREE;
-      case 'gemini': return hint === 'coder' ? GEMINI_CODER_MODELS : GEMINI_MODELS;
-      case 'groq': return hint === 'coder' ? GROQ_CODER_MODELS : GROQ_MODELS;
-      case 'openai': return [process.env.OPENAI_MODEL || 'gpt-4o-mini'];
-      default: return [];
-    }
-  }
-
   get providerName(): string { return this.currentProvider; }
-  get modelName(): string { return this.currentModel || 'unknown'; }
+  get modelName(): string { return this.currentModel; }
+  get isZai(): boolean { return this.currentProvider === 'zai' && !!this.zai; }
 
-  /** Main chat method — tries ALL providers with model fallback within each */
+  /** Main chat with multi-provider fallback */
   async chat(options: ChatCompletionOptions): Promise<ReadableStream<Uint8Array> | ChatCompletionResponse> {
-    // Z.ai SDK path
-    if (this.currentProvider === 'zai' && this.zai) {
+    // ── Try Z.ai SDK first (FREE, unlimited, best quality) ──
+    if (this.zai) {
       try {
-        return await this.zai.chat.completions.create({
+        const result = await this.zai.chat.completions.create({
           messages: options.messages as Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
           temperature: options.temperature,
-          max_tokens: options.max_tokens,
-          stream: options.stream,
+          max_tokens: options.max_tokens || 8192,
+          stream: false, // Z.ai SDK doesn't stream well, use non-streaming
         } as Parameters<typeof this.zai.chat.completions.create>[0]);
+        this.currentProvider = 'zai';
+        this.currentModel = 'glm-4-plus';
+        console.log('[AI Provider] ✓ Z.ai SDK (GLM-4-plus, FREE)');
+        return result as ChatCompletionResponse;
       } catch (zaiErr) {
-        console.warn('[AI Provider] Z.ai failed, falling back to other providers');
+        const msg = zaiErr instanceof Error ? zaiErr.message : 'Unknown';
+        console.warn(`[AI Provider] Z.ai SDK failed: ${msg.slice(0, 100)}`);
+        // Fall through to other providers
       }
     }
 
-    // If user set a specific model, use only that
+    // ── Try other providers with model fallback within each ──
     if (process.env.OPENROUTER_MODEL) {
       const orProvider = this.providers.find(p => p.provider === 'openrouter');
       if (orProvider) {
-        return openAICompatChat(orProvider.apiKey, orProvider.baseUrl, process.env.OPENROUTER_MODEL, 'openrouter', options);
+        try {
+          const result = await openAICompatChat(orProvider.apiKey, orProvider.baseUrl, process.env.OPENROUTER_MODEL, 'openrouter', options);
+          this.currentProvider = 'openrouter';
+          this.currentModel = process.env.OPENROUTER_MODEL;
+          return result;
+        } catch { /* fall through */ }
       }
     }
 
-    // Multi-provider fallback: try each provider, with model fallback within each
     const errors: string[] = [];
 
     for (const providerInfo of this.providers) {
       if (providerInfo.provider === 'zai') continue; // Already tried above
 
-      const models = this.getModelsForProvider(providerInfo.provider);
-      console.log(`[AI Provider] Trying ${providerInfo.provider} with ${models.length} models...`);
-
-      for (let m = 0; m < models.length; m++) {
-        const model = models[m];
+      for (let m = 0; m < providerInfo.models.length; m++) {
+        const model = providerInfo.models[m];
         try {
-          console.log(`[AI Provider] → ${providerInfo.provider}/${model} (${m + 1}/${models.length})`);
+          console.log(`[AI Provider] → ${providerInfo.provider}/${model}`);
           const result = await openAICompatChat(
             providerInfo.apiKey,
             providerInfo.baseUrl,
@@ -366,39 +375,31 @@ export class AIClient {
           );
           this.currentProvider = providerInfo.provider;
           this.currentModel = model;
-          console.log(`[AI Provider] ✓ Success: ${providerInfo.provider}/${model}`);
+          console.log(`[AI Provider] ✓ ${providerInfo.provider}/${model}`);
           return result;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : 'Unknown';
           const isRetriable = (err as Record<string, unknown>)?.retriable === true;
-          errors.push(`${providerInfo.provider}/${model}: ${errMsg.slice(0, 80)}`);
+          errors.push(errMsg.slice(0, 100));
 
-          // Auth errors = this provider is done, try next provider
+          // Auth errors = skip this entire provider
           if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('Invalid API key') || errMsg.includes('Authentication')) {
-            console.warn(`[AI Provider] Auth error for ${providerInfo.provider}, skipping to next provider`);
-            break; // Break model loop, move to next provider
+            break;
           }
 
-          // Rate limit for this provider = try next model, or next provider if all models fail
-          if (isRetriable && m < models.length - 1) {
+          if (isRetriable && m < providerInfo.models.length - 1) {
             await new Promise(r => setTimeout(r, Math.min(300 * (m + 1), 2000)));
             continue;
-          }
-
-          // If all models in this provider failed, try next provider
-          if (m === models.length - 1) {
-            console.warn(`[AI Provider] All ${models.length} models failed for ${providerInfo.provider}`);
           }
         }
       }
     }
 
-    // All providers and models failed
     throw new Error(
       `All providers exhausted. Errors:\n${errors.slice(0, 5).join('\n')}\n\n` +
-      `To fix: Add more free API keys on Vercel:\n` +
+      `To get FREE unlimited AI, add these keys on Vercel:\n` +
       `• GEMINI_API_KEY — FREE, 1500 req/day! → https://aistudio.google.com/apikey\n` +
-      `• GROQ_API_KEY — FREE, ultra-fast → https://console.groq.com/keys`
+      `• GROQ_API_KEY — FREE → https://console.groq.com/keys`
     );
   }
 
@@ -410,17 +411,17 @@ export class AIClient {
     }>;
   }): Promise<ChatCompletionResponse> {
     if (this.zai) {
-      return this.zai.chat.completions.createVision({
-        messages: options.messages as Parameters<typeof this.zai.chat.completions.createVision>[0]['messages'],
-        thinking: { type: 'disabled' },
-      });
+      try {
+        return await this.zai.chat.completions.createVision({
+          messages: options.messages as Parameters<typeof this.zai.chat.completions.createVision>[0]['messages'],
+          thinking: { type: 'disabled' },
+        });
+      } catch { /* fall through */ }
     }
 
     const provider = this.providers.find(p => p.provider === 'openrouter') || this.providers[0];
-    const visionModel = provider.provider === 'openrouter'
-      ? 'nvidia/nemotron-nano-12b-v2-vl:free'
-      : this.currentModel;
-
+    if (!provider) throw new Error('No providers available for vision');
+    const visionModel = provider.provider === 'openrouter' ? 'nvidia/nemotron-nano-12b-v2-vl:free' : provider.models[0];
     return openAICompatVision(provider.apiKey, provider.baseUrl, visionModel, provider.provider, options);
   }
 

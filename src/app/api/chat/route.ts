@@ -464,11 +464,11 @@ export async function POST(req: NextRequest) {
           ...messages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
         ];
 
-        // ── 5. Stream AI completion ──
+        // ── 5. Get AI completion ──
         sse(controller, { status: 'generating', content: '', done: false });
 
         const ai = await AIClient.create(routeModelHint);
-        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Hint: ${routeModelHint}, Skill: ${skill || agent || 'general'}`);
+        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Z.ai: ${ai.isZai}, Skill: ${skill || agent || 'general'}`);
 
         let completion: unknown = null;
         try {
@@ -476,7 +476,7 @@ export async function POST(req: NextRequest) {
             messages: apiMessages,
             temperature: 0.7,
             max_tokens: 8192,
-            stream: true,
+            stream: !ai.isZai, // Z.ai SDK uses non-streaming (more reliable), others stream
           });
         } catch (apiErr) {
           const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
@@ -484,14 +484,14 @@ export async function POST(req: NextRequest) {
 
           // Provide user-friendly error messages
           let userMsg = errMsg;
-          if (errMsg.includes('All providers exhausted') || errMsg.includes('All') && errMsg.includes('free models are currently busy')) {
-            userMsg = '🔄 All AI providers are currently busy or rate-limited.\n\nTo get UNLIMITED free access, add these FREE API keys on Vercel:\n\n1. GEMINI_API_KEY — FREE, 1500 requests/day!\n   Get it at: https://aistudio.google.com/apikey\n   (Just sign in with Google, click "Create API Key")\n\n2. GROQ_API_KEY — FREE, ultra-fast!\n   Get it at: https://console.groq.com/keys\n\nWith Gemini + Groq added, you will never run out of free requests!';
+          if (errMsg.includes('All providers exhausted') || (errMsg.includes('All') && errMsg.includes('busy'))) {
+            userMsg = '🔄 All AI providers are busy or rate-limited.\n\nQuick fix — add a FREE Gemini API key on Vercel:\n1. Go to https://aistudio.google.com/apikey\n2. Sign in with Google → Create API Key\n3. Add GEMINI_API_KEY on Vercel\n→ 1500 FREE requests/day, no credit card!';
           } else if (errMsg.includes('Rate limit exceeded') || errMsg.includes('free-models-per-day')) {
-            userMsg = '⏰ OpenRouter daily free limit reached (50 req/day).\n\nFix: Add GEMINI_API_KEY on Vercel for FREE unlimited access!\nGet it at: https://aistudio.google.com/apikey\n\nOr add $5 credits at https://openrouter.ai/settings/credits for 1000 free req/day.';
+            userMsg = '⏰ OpenRouter daily limit reached (50 free req/day).\n\nFix: Add GEMINI_API_KEY on Vercel for FREE 1500 req/day!\n→ https://aistudio.google.com/apikey';
           } else if (errMsg.includes('Insufficient credits') || errMsg.includes('402')) {
-            userMsg = '💳 Credits required for paid models. Add GEMINI_API_KEY on Vercel for FREE access (1500 req/day)!\nGet it at: https://aistudio.google.com/apikey';
+            userMsg = '💳 Add GEMINI_API_KEY on Vercel for FREE access (1500 req/day)!\n→ https://aistudio.google.com/apikey';
           } else if (errMsg.includes('No AI providers configured')) {
-            userMsg = '⚠️ No AI providers configured. Add at least one FREE API key on Vercel:\n\n• GEMINI_API_KEY — FREE, 1500 req/day → https://aistudio.google.com/apikey\n• OPENROUTER_API_KEY — Free → https://openrouter.ai/keys\n• GROQ_API_KEY — FREE, fast → https://console.groq.com/keys';
+            userMsg = '⚠️ No AI providers. Add a FREE key on Vercel:\n• GEMINI_API_KEY → https://aistudio.google.com/apikey (FREE, 1500/day)\n• OPENROUTER_API_KEY → https://openrouter.ai/keys\n• GROQ_API_KEY → https://console.groq.com/keys';
           }
 
           sse(controller, { error: userMsg, done: true });
@@ -505,8 +505,10 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // Handle non-streaming JSON response
-        if (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream)) {
+        // ── 6. Handle response (Z.ai non-streaming OR other providers streaming) ──
+
+        // Z.ai SDK returns a non-streaming JSON response — send it all at once
+        if (ai.isZai || (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream))) {
           const resp = completion as Record<string, unknown>;
           if (resp.error) {
             sse(controller, { error: `API error: ${JSON.stringify(resp.error)}`, done: true });
