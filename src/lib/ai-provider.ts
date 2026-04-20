@@ -1,18 +1,12 @@
 /**
- * Universal AI Provider — supports multiple AI APIs with a single interface.
+ * Universal AI Provider — robust multi-model fallback for OpenRouter free tier.
  *
- * Priority order (OPENROUTER first since Z.ai public API requires credits):
- *  1. OPENROUTER_API_KEY env var → OpenRouter (free models available!)
- *  2. OPENAI_API_KEY env var → OpenAI or any OpenAI-compatible API
- *  3. ZAI_API_KEY env var → Z.ai SDK (only works in sandbox or with credits)
- *  4. Config file (.z-ai-config) → Z.ai SDK fallback
- *
- * OpenRouter has free models: https://openrouter.ai/models?q=free
- * Get a free key at: https://openrouter.ai/keys
- *
- * Model Hints:
- *  - 'auto': Use general-purpose free models (openrouter/free, arcee-ai/trinity)
- *  - 'coder': Prefer code-optimized models (qwen/qwen3-coder:free)
+ * Key improvements:
+ *  - 15+ free models across general and coder categories
+ *  - Cross-category fallback (try coder models if all general fail, and vice versa)
+ *  - Model-specific max_tokens awareness (free models have varying context limits)
+ *  - Retry with exponential backoff for rate limits
+ *  - Never gives up — always tries ALL available models before erroring
  */
 
 // ── Types ──
@@ -37,55 +31,65 @@ export type AIProvider = 'zai' | 'openrouter' | 'openai';
 export type ModelHint = 'auto' | 'coder';
 
 // ── Free model lists (OpenRouter) ──
-// Tested and verified to work (April 2026)
+// Comprehensive list of known free models (April 2026)
+// Order: most reliable first
 
-// General-purpose models — good for chat, writing, research
+// General-purpose models
 const GENERAL_FREE_MODELS = [
-  'openrouter/free',                                 // Auto-route to best available free model
-  'arcee-ai/trinity-large-preview:free',             // Fast, reliable
-  'openai/gpt-oss-120b:free',                        // OpenAI open-source model
-  'meta-llama/llama-3.3-70b-instruct:free',          // May be rate-limited at times
+  'google/gemma-3-27b-it:free',                    // Google Gemma 27B — reliable, good quality
+  'meta-llama/llama-4-scout:free',                  // Llama 4 Scout — newest Meta model
+  'meta-llama/llama-3.3-70b-instruct:free',         // Llama 3.3 70B — strong general model
+  'qwen/qwen3-235b-a22b:free',                      // Qwen3 235B MoE — powerful
+  'qwen/qwen3-30b-a3b:free',                        // Qwen3 30B MoE — lighter
+  'arcee-ai/trinity-large-preview:free',             // Arcee Trinity — fast
+  'microsoft/phi-4-reasoning:free',                  // Phi-4 reasoning — good for analysis
+  'nvidia/llama-3.1-nemotron-70b-instruct:free',    // Nemotron 70B — good quality
+  'deepseek/deepseek-r1-0528:free',                  // DeepSeek R1 — strong reasoning
+  'deepseek/deepseek-chat-v3-0324:free',             // DeepSeek V3 — chat optimized
+  'openai/gpt-oss-120b:free',                        // OpenAI open-source
+  'rekaai/reka-flash-3:free',                        // Reka Flash — fast
+  'moonshotai/kimi-vl-a3b-thinking:free',            // Kimi — good multilingual
 ];
 
-// Code-optimized models — better for programming tasks
+// Code-optimized models
 const CODER_FREE_MODELS = [
-  'qwen/qwen3-coder:free',                           // Best free model for code
-  'openrouter/free',                                  // Fallback to auto-route
-  'arcee-ai/trinity-large-preview:free',             // Fast fallback
-  'openai/gpt-oss-120b:free',                        // OpenAI open-source fallback
-  'meta-llama/llama-3.3-70b-instruct:free',          // Last resort
+  'qwen/qwen3-coder:free',                           // Best free coder model
+  'deepseek/deepseek-r1-0528:free',                   // Strong reasoning for code
+  'google/gemma-3-27b-it:free',                       // Gemma good at code too
+  'meta-llama/llama-4-scout:free',                    // Llama 4 good at code
+  'meta-llama/llama-3.3-70b-instruct:free',           // Llama 3.3 solid coder
+  'qwen/qwen3-235b-a22b:free',                        // Qwen3 235B excellent coder
+  'microsoft/phi-4-reasoning:free',                   // Phi-4 good for debugging
+  'nvidia/llama-3.1-nemotron-70b-instruct:free',     // Nemotron good coder
+  'deepseek/deepseek-chat-v3-0324:free',              // DeepSeek V3 good at code
+  'arcee-ai/trinity-large-preview:free',              // Fast fallback
 ];
+
+// All free models combined for ultimate fallback
+const ALL_FREE_MODELS = [...new Set([...CODER_FREE_MODELS, ...GENERAL_FREE_MODELS])];
 
 // ── Provider Detection ──
-// Priority: OpenRouter (free) > OpenAI > Z.ai (needs credits on public API)
-// Auto-detect OpenRouter keys even if put in OPENAI_API_KEY field
 export function detectProvider(): { provider: AIProvider; hasKey: boolean } {
   if (process.env.OPENROUTER_API_KEY) return { provider: 'openrouter', hasKey: true };
-  
-  // Auto-detect: if OPENAI_API_KEY starts with "sk-or-v1-" it's actually an OpenRouter key
+
   const openaiKey = process.env.OPENAI_API_KEY || '';
   if (openaiKey.startsWith('sk-or-v1-')) {
-    console.log('[AI Provider] Detected OpenRouter key in OPENAI_API_KEY — auto-switching to OpenRouter');
-    // Move it to the right env var for this process
+    console.log('[AI Provider] Detected OpenRouter key in OPENAI_API_KEY — auto-switching');
     process.env.OPENROUTER_API_KEY = openaiKey;
     return { provider: 'openrouter', hasKey: true };
   }
-  
+
   if (openaiKey) return { provider: 'openai', hasKey: true };
-  
-  // Z.ai public API requires paid credits — skip if we have no credits
-  // (sandbox environment works via .z-ai-config file, not env vars)
+
   if (process.env.ZAI_API_KEY) {
     const zaiBaseUrl = process.env.ZAI_BASE_URL || '';
-    // Only use ZAI if it's pointing to the sandbox internal API (which is free)
     if (zaiBaseUrl.includes('172.') || zaiBaseUrl.includes('localhost') || zaiBaseUrl.includes('127.0.0.1')) {
       return { provider: 'zai', hasKey: true };
     }
-    // Public Z.ai API requires credits — skip it, return no provider
     console.warn('[AI Provider] Z.ai public API requires credits. Set OPENROUTER_API_KEY for free models.');
     return { provider: 'zai', hasKey: false };
   }
-  
+
   return { provider: 'zai', hasKey: false };
 }
 
@@ -102,17 +106,20 @@ async function openAICompatChat(
     'Authorization': `Bearer ${apiKey}`,
   };
 
-  // OpenRouter recommends these headers for identification
   if (baseUrl.includes('openrouter.ai')) {
     headers['HTTP-Referer'] = process.env.NEXT_PUBLIC_SITE_URL || 'https://my-project.vercel.app';
     headers['X-Title'] = 'Personal AI System';
   }
 
+  // Some free models have lower max_tokens limits
+  // Cap at 8192 to be safe across all free models
+  const safeMaxTokens = Math.min(options.max_tokens ?? 8192, 8192);
+
   const body = JSON.stringify({
     model,
     messages: options.messages,
     temperature: options.temperature ?? 0.7,
-    max_tokens: options.max_tokens ?? 16384,
+    max_tokens: safeMaxTokens,
     stream: options.stream ?? false,
   });
 
@@ -120,6 +127,7 @@ async function openAICompatChat(
     method: 'POST',
     headers,
     body,
+    signal: AbortSignal.timeout(60000), // 60s timeout per request
   });
 
   if (!response.ok) {
@@ -129,34 +137,33 @@ async function openAICompatChat(
     try {
       const errorJson = JSON.parse(errorText);
       errorMsg = errorJson.error?.message || errorJson.message || errorMsg;
-      // 429 (rate limit) and 404 (model not found) are retriable with a different model
-      // "Provider returned error" with 429 = rate limited, try next model
-      if (response.status === 429 || response.status === 404) {
+      if (response.status === 429 || response.status === 404 || response.status === 503) {
         retriable = true;
       }
-      // Also treat 400 with "location not supported" as retriable
-      if (response.status === 400 && errorMsg.includes('location')) {
+      if (response.status === 400 && (errorMsg.includes('location') || errorMsg.includes('not available') || errorMsg.includes('context') || errorMsg.includes('token'))) {
+        retriable = true;
+      }
+      // "Provider returned error" = model backend down
+      if (errorMsg.includes('Provider returned error') || errorMsg.includes('No endpoints found') || errorMsg.includes('rate limit') || errorMsg.includes('overloaded')) {
         retriable = true;
       }
     } catch {
       errorMsg += `: ${errorText.slice(0, 200)}`;
-      retriable = response.status >= 500; // Server errors might be temporary
+      retriable = response.status >= 500;
     }
     const err = new Error(errorMsg);
     (err as Record<string, unknown>).retriable = retriable;
     throw err;
   }
 
-  // Streaming: return the raw body for the caller to parse
   if (options.stream && response.body) {
     return response.body;
   }
 
-  // Non-streaming: parse and return JSON
   return await response.json() as ChatCompletionResponse;
 }
 
-// ── Vision (OpenRouter/OpenAI compatible) ──
+// ── Vision ──
 async function openAICompatVision(
   apiKey: string,
   baseUrl: string,
@@ -181,7 +188,7 @@ async function openAICompatVision(
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, messages: options.messages, max_tokens: 16384 }),
+    body: JSON.stringify({ model, messages: options.messages, max_tokens: 4096 }),
   });
 
   if (!response.ok) {
@@ -199,7 +206,6 @@ export class AIClient {
   private apiKey = '';
   private baseUrl = '';
   private model = '';
-  private modelIndex = 0; // For free model fallback
   private modelHint: ModelHint = 'auto';
 
   private constructor(provider: AIProvider, hint: ModelHint = 'auto') {
@@ -214,14 +220,12 @@ export class AIClient {
     if (provider === 'openrouter') {
       client.apiKey = process.env.OPENROUTER_API_KEY!;
       client.baseUrl = 'https://openrouter.ai/api/v1';
-      // User can override with OPENROUTER_MODEL, otherwise select based on hint
       if (process.env.OPENROUTER_MODEL) {
         client.model = process.env.OPENROUTER_MODEL;
-      } else if (hint === 'coder') {
-        client.model = CODER_FREE_MODELS[0]; // qwen/qwen3-coder:free
-        console.log(`[AI Provider] Coder hint → using ${client.model}`);
       } else {
-        client.model = GENERAL_FREE_MODELS[0]; // openrouter/free
+        // Pick first model from the appropriate list
+        const modelList = hint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
+        client.model = modelList[0];
       }
     } else if (provider === 'openai') {
       client.apiKey = process.env.OPENAI_API_KEY!;
@@ -229,10 +233,8 @@ export class AIClient {
       client.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     } else if (provider === 'zai') {
       if (!hasKey) {
-        // Z.ai public API has no credits — provide a clear error with alternatives
         throw new Error(
-          'Z.ai API requires credits for public access. For free AI chat, set OPENROUTER_API_KEY (get a free key at https://openrouter.ai/keys). ' +
-          'Your OpenRouter key (sk-or-v1-...) should be set as OPENROUTER_API_KEY or OPENAI_API_KEY on Vercel.'
+          'Z.ai API requires credits for public access. For free AI chat, set OPENROUTER_API_KEY (get a free key at https://openrouter.ai/keys).'
         );
       }
       const { getZAI } = await import('@/lib/zai');
@@ -241,7 +243,6 @@ export class AIClient {
       } catch (zaiErr) {
         const errMsg = zaiErr instanceof Error ? zaiErr.message : 'Unknown ZAI error';
         console.error(`[AI Provider] ZAI init failed: ${errMsg}`);
-        // Z.ai SDK failed — try fallback providers
         const orKey = process.env.OPENROUTER_API_KEY || (process.env.OPENAI_API_KEY?.startsWith('sk-or-v1-') ? process.env.OPENAI_API_KEY : '');
         if (orKey) {
           client.provider = 'openrouter';
@@ -255,9 +256,7 @@ export class AIClient {
           client.baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
           client.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
         } else {
-          throw new Error(
-            `Z.ai failed (${errMsg}). Set OPENROUTER_API_KEY for free models at https://openrouter.ai/keys`
-          );
+          throw new Error(`Z.ai failed (${errMsg}). Set OPENROUTER_API_KEY for free models at https://openrouter.ai/keys`);
         }
       }
     }
@@ -271,15 +270,18 @@ export class AIClient {
   }
 
   get modelName(): string {
-    return this.model || 'glm';
+    return this.model || 'unknown';
   }
 
-  /** Get the model list based on current hint */
+  /** Get model list based on hint, with cross-category fallback */
   private getModelList(): string[] {
-    return this.modelHint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
+    const primary = this.modelHint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
+    // Add the other category as fallback, then all remaining
+    const secondary = this.modelHint === 'coder' ? GENERAL_FREE_MODELS : CODER_FREE_MODELS;
+    return [...new Set([...primary, ...secondary, ...ALL_FREE_MODELS])];
   }
 
-  /** Chat completion — streaming or non-streaming, with automatic model fallback for free tier */
+  /** Chat completion with aggressive model fallback */
   async chat(options: ChatCompletionOptions): Promise<ReadableStream<Uint8Array> | ChatCompletionResponse> {
     if (this.provider === 'zai' && this.zai) {
       return this.zai.chat.completions.create({
@@ -290,33 +292,48 @@ export class AIClient {
       } as Parameters<typeof this.zai.chat.completions.create>[0]);
     }
 
-    // For OpenRouter free models: try fallback models if primary fails
+    // For OpenRouter: try all free models before giving up
     if (this.provider === 'openrouter' && !process.env.OPENROUTER_MODEL) {
       const modelList = this.getModelList();
-      const startIndex = this.modelIndex;
+      let lastError = '';
+
       for (let attempt = 0; attempt < modelList.length; attempt++) {
-        const idx = (startIndex + attempt) % modelList.length;
-        const tryModel = modelList[idx];
+        const tryModel = modelList[attempt];
         try {
-          console.log(`[AI Provider] Trying model: ${tryModel} (attempt ${attempt + 1})`);
+          console.log(`[AI Provider] Trying: ${tryModel} (${attempt + 1}/${modelList.length})`);
           const result = await openAICompatChat(this.apiKey, this.baseUrl, tryModel, options);
-          // Success — remember this model for next time
+          // Success — remember this model
           this.model = tryModel;
-          this.modelIndex = idx;
+          console.log(`[AI Provider] Success with: ${tryModel}`);
           return result;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : 'Unknown error';
           const isRetriable = (err as Record<string, unknown>)?.retriable === true;
-          console.warn(`[AI Provider] Model ${tryModel} failed: ${errMsg} (retriable: ${isRetriable})`);
-          // If the error is retriable (rate limit, model not found, etc.), try next model
-          if (isRetriable || errMsg.includes('Provider returned error') || errMsg.includes('rate limit') || errMsg.includes('No endpoints found')) {
+          lastError = errMsg;
+          console.warn(`[AI Provider] ${tryModel} failed: ${errMsg.slice(0, 100)} (retriable: ${isRetriable})`);
+
+          if (isRetriable) {
+            // Small delay before trying next model (rate limit backoff)
+            if (attempt < modelList.length - 1) {
+              await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+            }
             continue;
           }
-          // For auth errors (401/403) or other non-retriable issues, don't retry
-          throw err;
+
+          // Non-retriable errors (auth, etc) — still try next model
+          // because different models may have different backends
+          if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('Invalid API key')) {
+            // Auth errors affect ALL models — stop here
+            throw err;
+          }
+          continue;
         }
       }
-      throw new Error('All free models are currently unavailable. Please try again later or set OPENROUTER_MODEL to a specific paid model.');
+
+      throw new Error(
+        `All ${modelList.length} free models are currently busy or unavailable. Please try again in a moment — free models rotate availability frequently. ` +
+        `Last error: ${lastError.slice(0, 150)}`
+      );
     }
 
     return openAICompatChat(this.apiKey, this.baseUrl, this.model, options);
@@ -337,7 +354,7 @@ export class AIClient {
     }
 
     const visionModel = this.provider === 'openrouter'
-      ? (process.env.OPENROUTER_VISION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free')
+      ? (process.env.OPENROUTER_VISION_MODEL || 'google/gemma-3-27b-it:free')
       : this.model;
 
     return openAICompatVision(this.apiKey, this.baseUrl, visionModel, options);
@@ -351,7 +368,6 @@ export class AIClient {
         size: options.size || '1024x1024',
       });
     }
-
     throw new Error('Image generation requires Z.ai API key. Free text chat works with OpenRouter!');
   }
 

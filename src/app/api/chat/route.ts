@@ -1,45 +1,402 @@
 import { NextRequest } from 'next/server';
 import { AIClient } from '@/lib/ai-provider';
 import { db } from '@/lib/db';
-import { getSkillContent, getAgentContent } from '@/lib/skills-loader';
 import { SKILLS } from '@/lib/skills';
 import { AGENTS } from '@/lib/agents';
 
 export const maxDuration = 120;
 export const dynamic = 'force-dynamic';
 
-// Helper: check if a value is async iterable (stream)
+// Check if a value is async iterable (stream)
 function isAsyncIterable(obj: unknown): obj is AsyncIterable<unknown> {
   return obj != null && typeof (obj as Record<string, unknown>)[Symbol.asyncIterator] === 'function';
 }
 
-// Detect if a message is coding-related (for model selection)
-function isCodingMessage(content: string): boolean {
+// ── Fast keyword-based skill/agent routing (NO LLM call — instant) ──
+function fastRoute(content: string): { route: string; type: 'skill' | 'agent' | 'none'; name: string; modelHint: 'auto' | 'coder' } {
   const c = content.toLowerCase();
-  return /\b(code|coding|program|function|script|debug|fix bug|refactor|typescript|javascript|python|java|rust|go|react|next\.?js|node\.?js|api|html|css|sql|database|git|npm|yarn|pip|cargo|component|hook|render|async|await|class|interface|type|array|object|string|number|boolean|error|exception|compile|build|deploy|server|client|frontend|backend|fullstack|algorithm|data structure|leetcode|hackerrank)\b/i.test(c);
+
+  // Simple greetings — skip routing
+  if (/^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|howdy|sup|yo|what'?s\s*up|hola)[\s!.?]*$/i.test(c)) {
+    return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
+  }
+  if (content.length < 10 && /^(thanks|thank you|ok|okay|bye|goodbye|sure|yes|no|maybe)[\s!.?]*$/i.test(c)) {
+    return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
+  }
+
+  // Image generation
+  if (/\b(generate|create|draw|make)\b.*\b(image|picture|photo|illustration|artwork|logo|icon)\b/.test(c)) {
+    return { route: 'image-generation', type: 'skill', name: 'Image Generation', modelHint: 'auto' };
+  }
+
+  // Web search
+  if (/^\s*(search|find|look up|google)\b/i.test(c) || /\bweb\s*search\b/i.test(c)) {
+    return { route: 'web-search', type: 'skill', name: 'Web Search', modelHint: 'auto' };
+  }
+
+  // ── Code-related routing ──
+  const isCode = /\b(code|coding|program|function|script|debug|fix bug|refactor|typescript|javascript|python|java|rust|go\s*lang|react|next\.?js|node\.?js|api|html|css|sql|database|git|npm|yarn|pip|cargo|component|hook|render|async|await|class|interface|type|array|error|exception|compile|build|deploy|server|client|frontend|backend|fullstack|algorithm|leetcode|docker|kubernetes|prisma|drizzle|tailwind|express|fastapi|django|flask|spring|kotlin|swift|dart|flutter|cpp|c\+\+|perl|php|laravel|vue|svelte|angular)\b/i.test(c);
+
+  if (isCode) {
+    // Specific language/framework routing
+    if (/\b(review|code\s*review)\b/i.test(c)) return { route: 'code-review', type: 'skill', name: 'Code Review', modelHint: 'coder' };
+    if (/\b(security|vulnerability|exploit|hack)\b/i.test(c)) return { route: 'security', type: 'skill', name: 'Security', modelHint: 'coder' };
+    if (/\b(test|testing|unit\s*test|tdd|pytest|jest)\b/i.test(c)) return { route: 'tdd', type: 'skill', name: 'TDD / Testing', modelHint: 'coder' };
+    if (/\b(python|django|flask|pytest|pip|fastapi|pytorch)\b/i.test(c)) return { route: 'python-patterns', type: 'skill', name: 'Python Development', modelHint: 'coder' };
+    if (/\b(rust|cargo|borrow|ownership|lifetime)\b/i.test(c)) return { route: 'rust-patterns', type: 'skill', name: 'Rust Development', modelHint: 'coder' };
+    if (/\b(golang|go\s*lang|goroutine|channel|go\s*mod)\b/i.test(c)) return { route: 'golang-patterns', type: 'skill', name: 'Go Development', modelHint: 'coder' };
+    if (/\b(java|spring|jpa|hibernate|maven|gradle)\b/i.test(c)) return { route: 'springboot-patterns', type: 'skill', name: 'Spring Boot', modelHint: 'coder' };
+    if (/\b(kotlin|android|jetpack|compose)\b/i.test(c)) return { route: 'kotlin-patterns', type: 'skill', name: 'Kotlin Development', modelHint: 'coder' };
+    if (/\b(c\+\+|cmake|clang)\b/i.test(c)) return { route: 'cpp-coding-standards', type: 'skill', name: 'C++ Coding', modelHint: 'coder' };
+    if (/\b(swift|ios|swiftui|xcode)\b/i.test(c)) return { route: 'swiftui-patterns', type: 'skill', name: 'SwiftUI', modelHint: 'coder' };
+    if (/\b(laravel|php|artisan|blade|eloquent)\b/i.test(c)) return { route: 'laravel-patterns', type: 'skill', name: 'Laravel', modelHint: 'coder' };
+    if (/\b(flutter|dart|widget|pub)\b/i.test(c)) return { route: 'dart-flutter-patterns', type: 'skill', name: 'Flutter/Dart', modelHint: 'coder' };
+    if (/\b(perl|cpan)\b/i.test(c)) return { route: 'perl-patterns', type: 'skill', name: 'Perl', modelHint: 'coder' };
+    if (/\b(database|sql|postgres|mysql|prisma|drizzle|query|schema|migration)\b/i.test(c)) return { route: 'postgres-patterns', type: 'skill', name: 'Database', modelHint: 'coder' };
+    if (/\b(docker|kubernetes|deploy|ci.?cd|github\s*actions|terraform)\b/i.test(c)) return { route: 'docker-patterns', type: 'skill', name: 'DevOps', modelHint: 'coder' };
+    if (/\b(api|rest|graphql|endpoint|route)\b/i.test(c)) return { route: 'api-design', type: 'skill', name: 'API Design', modelHint: 'coder' };
+    if (/\b(architect|design\s*system|system\s*design|scalability|microservice)\b/i.test(c)) return { route: 'architect', type: 'skill', name: 'Architect', modelHint: 'coder' };
+    if (/\b(typescript|react|next\.?js|node\.?js|tsx|jsx|npm|yarn|vite|webpack|tailwind|vue|svelte|angular)\b/i.test(c)) return { route: 'fullstack-dev', type: 'skill', name: 'Fullstack Development', modelHint: 'coder' };
+
+    // Generic code request
+    return { route: 'fullstack-dev', type: 'skill', name: 'Fullstack Development', modelHint: 'coder' };
+  }
+
+  // ── Non-coding routing ──
+  if (/\b(write|essay|article|blog|content|email|letter|copy|draft|compose)\b/i.test(c)) return { route: 'writer', type: 'skill', name: 'Writer', modelHint: 'auto' };
+  if (/\b(analyz|research|investigate|study|compare|market|competitor)\b/i.test(c)) return { route: 'researcher', type: 'skill', name: 'Researcher', modelHint: 'auto' };
+  if (/\b(plan|roadmap|milestone|phase|break\s*down|strategy)\b/i.test(c)) return { route: 'planner', type: 'skill', name: 'Planner', modelHint: 'auto' };
+  if (/\b(design|ui|ux|figma|wireframe|prototype)\b/i.test(c)) return { route: 'design-system', type: 'skill', name: 'Design System', modelHint: 'auto' };
+  if (/\b(finance|stock|investment|crypto|bitcoin|trading)\b/i.test(c)) return { route: 'finance', type: 'skill', name: 'Finance', modelHint: 'auto' };
+  if (/\b(health|medical|clinical|patient|diagnosis)\b/i.test(c)) return { route: 'healthcare', type: 'skill', name: 'Healthcare', modelHint: 'auto' };
+  if (/\b(seo|search\s*engine|ranking|keyword|optimization)\b/i.test(c)) return { route: 'seo', type: 'skill', name: 'SEO', modelHint: 'auto' };
+
+  return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
 }
 
+// ── Build system prompt ──
+// COMPACT but EFFECTIVE — designed so the model ACTUALLY follows the skill instructions
+function buildSystemPrompt(skill?: string, agent?: string): string {
+  const skillCounts: Record<string, number> = {};
+  for (const s of SKILLS) skillCounts[s.category] = (skillCounts[s.category] || 0) + 1;
+  const totalSkills = SKILLS.length;
+  const totalAgents = AGENTS.length;
+
+  // Base identity — SHORT so there's room for skill instructions AND the response
+  let prompt = `You are Z, a powerful personal AI assistant with ${totalSkills} skills and ${totalAgents} agents. You are NOT ChatGPT, NOT GPT, NOT OpenAI — you are Z. Always say "I am Z" if asked who you are.
+
+CORE RULES (FOLLOW THESE EXACTLY):
+1. Give COMPLETE answers. NEVER truncate or cut off mid-code.
+2. For CODE: Write full working implementations with imports, types, error handling. Use multiple code blocks if needed. NEVER write partial code.
+3. For WRITING: Rich paragraphs of 3-5+ sentences. No shallow content.
+4. For ANALYSIS: Evidence-based with specific details, data, and examples.
+5. When you activate a skill, FULLY apply its methodology — do not ignore it.`;
+
+  // Add skill-specific instructions
+  if (skill && skill !== 'general') {
+    prompt += '\n\n' + getSkillInstructions(skill);
+  }
+
+  if (agent) {
+    prompt += '\n\n' + getAgentInstructions(agent);
+  }
+
+  return prompt;
+}
+
+function getSkillInstructions(skill: string): string {
+  const map: Record<string, string> = {
+    'fullstack-dev': `═══ FULLSTACK DEVELOPMENT ACTIVATED ═══
+You MUST write production-quality code following these rules:
+- TypeScript FIRST with proper types, interfaces, generics
+- Modern React: function components, hooks, Server Components
+- Next.js App Router patterns: proper data fetching, Server Actions, streaming
+- API: RESTful design, proper status codes, input validation, error responses
+- Database: Prisma/Drizzle with proper schema, migrations, queries
+- Error handling: try-catch, proper error types, user-friendly messages
+- Security: input validation, sanitization, parameterized queries
+- Performance: lazy loading, code splitting, caching, optimistic updates
+- ALWAYS show COMPLETE working code with ALL imports, types, exports needed to run
+- Explain your approach BEFORE showing code
+- If the code is long, split into MULTIPLE code blocks (one per file) — NEVER truncate`,
+
+    'python-patterns': `═══ PYTHON DEVELOPMENT ACTIVATED ═══
+Write idiomatic, production-quality Python:
+- PEP 8 style, type hints, docstrings on all public functions
+- Use dataclasses, enums, protocols, context managers, generators where appropriate
+- Async: asyncio for I/O-bound, multiprocessing for CPU-bound work
+- Error handling: custom exceptions, proper exception chaining, logging
+- Testing: pytest with fixtures, parametrize, mock where needed
+- Packaging: pyproject.toml, proper dependency management
+- Show COMPLETE working code with imports and type hints
+- Never truncate — split into multiple code blocks if needed`,
+
+    'rust-patterns': `═══ RUST DEVELOPMENT ACTIVATED ═══
+Write safe, idiomatic Rust:
+- Ownership: proper borrow checker usage, lifetimes where needed
+- Error handling: Result<T,E>, thiserror/anyhow, never panic in libraries
+- Concurrency: Send/Sync, channels, async with tokio
+- Patterns: Builder, newtype, trait objects, generics with trait bounds
+- Testing: #[test], #[tokio::test], property-based testing
+- Show complete working code with Cargo.toml dependencies
+- Never truncate — split into multiple code blocks if needed`,
+
+    'golang-patterns': `═══ GO DEVELOPMENT ACTIVATED ═══
+Write idiomatic, production-quality Go:
+- Effective Go patterns, proper error handling, context propagation
+- Concurrency: goroutines, channels, select, sync primitives
+- Small, focused interfaces, composition over inheritance
+- Table-driven tests, testify assertions, integration tests
+- Proper package structure, go modules
+- Show complete working code with module declarations
+- Never truncate — split into multiple code blocks if needed`,
+
+    'code-review': `═══ CODE REVIEW ACTIVATED ═══
+Perform expert code review on every piece of code:
+1. SECURITY: Injection, auth bypass, data leaks, OWASP Top 10
+2. PERFORMANCE: N+1 queries, memory leaks, O(n²) algorithms
+3. QUALITY: Error handling, edge cases, naming, DRY violations
+4. MAINTAINABILITY: Typing, documentation, separation of concerns
+5. CORRECTNESS: Race conditions, null pointers, off-by-one errors
+Format: [SEVERITY: CRITICAL/HIGH/MEDIUM/LOW] Issue → Fix with code example`,
+
+    'tdd': `═══ TEST-DRIVEN DEVELOPMENT ACTIVATED ═══
+Follow TDD workflow strictly:
+1. RED: Write a failing test describing desired behavior
+2. GREEN: Write minimal code to make test pass
+3. REFACTOR: Improve while keeping tests green
+- Target 80%+ test coverage
+- Use descriptive names: "should [expected] when [condition]"
+- Test edge cases: null, undefined, empty, boundary, error states
+- Show COMPLETE test files AND implementation files`,
+
+    'security': `═══ SECURITY ANALYSIS ACTIVATED ═══
+Check for:
+1. INJECTION: SQL, XSS, command, LDAP injection
+2. AUTH: Broken authentication, session management
+3. DATA EXPOSURE: Sensitive data in logs, URLs, errors
+4. ACCESS CONTROL: IDOR, privilege escalation
+5. CRYPTO: Weak algorithms, hardcoded keys
+6. DEPENDENCIES: Known CVEs, outdated packages
+7. CONFIG: Default credentials, open ports, CORS
+Rate: CRITICAL (breach risk) > HIGH (auth bypass) > MEDIUM (info leak) > LOW (best practice)`,
+
+    'architect': `═══ ARCHITECT MODE ACTIVATED ═══
+Design system architecture:
+1. REQUIREMENTS: Functional and non-functional
+2. HIGH-LEVEL: Component diagram, data flow, API boundaries
+3. TECHNOLOGY: Justify choices with trade-offs
+4. SCALABILITY: Horizontal/vertical, caching, load balancing
+5. RELIABILITY: Error handling, retries, circuit breakers
+6. SECURITY: Auth, encryption, audit logging
+7. ADRs: Document key decisions with context and consequences`,
+
+    'planner': `═══ PLANNER MODE ACTIVATED ═══
+Create implementation plans:
+1. OBJECTIVE: Clear, measurable goal
+2. PHASES: 2-5 phases with dependencies
+3. TASKS: Specific, actionable with acceptance criteria
+4. RISKS: Identify and mitigate
+5. ESTIMATES: Effort per phase
+6. ORDER: Task ordering with blockers`,
+
+    'writer': `═══ WRITER MODE ACTIVATED ═══
+Create written content:
+- STRUCTURE: Clear intro, organized body, meaningful conclusion
+- DEPTH: Every paragraph 3-5+ sentences. No shallow content.
+- ENGAGEMENT: Hook the reader, maintain interest
+- TONE: Adapt to audience — professional, casual, technical, creative
+- EXAMPLES: Specific data points, case studies, evidence
+- CLARITY: Explain complex concepts simply`,
+
+    'researcher': `═══ RESEARCHER MODE ACTIVATED ═══
+Conduct thorough research:
+1. QUESTION: Define what you're investigating
+2. SOURCES: Cite specific evidence and data
+3. ANALYSIS: Compare perspectives, identify patterns
+4. SYNTHESIS: Evidence-supported conclusions
+5. RECOMMENDATIONS: Actionable next steps
+6. LIMITATIONS: Acknowledge unknowns`,
+
+    'frontend-patterns': `═══ FRONTEND DEVELOPMENT ACTIVATED ═══
+Write modern, performant UI code:
+- React: Hooks, Server Components, state management, memoization
+- Styling: Tailwind CSS, responsive, dark mode
+- Performance: Code splitting, lazy loading, image optimization
+- Accessibility: ARIA, keyboard nav, screen readers
+- TypeScript: Strict mode, proper component types
+- Show COMPLETE working components with types and styling`,
+
+    'backend-patterns': `═══ BACKEND DEVELOPMENT ACTIVATED ═══
+Write scalable server code:
+- API: RESTful, versioned, proper HTTP methods/status codes
+- Database: Connection pooling, query optimization, transactions
+- Auth: JWT, OAuth2, session management, RBAC
+- Middleware: Logging, rate limiting, CORS, validation
+- Errors: Centralized handler, proper error responses
+- Show COMPLETE working code with error handling and types`,
+
+    'api-design': `═══ API DESIGN ACTIVATED ═══
+Design RESTful APIs:
+- Resource naming, proper HTTP methods, status codes
+- Pagination, filtering, sorting for collections
+- Error response format, versioning strategy
+- Rate limiting, authentication requirements
+- OpenAPI/Swagger documentation
+- Show COMPLETE endpoint implementations with types`,
+
+    'postgres-patterns': `═══ DATABASE DEVELOPMENT ACTIVATED ═══
+Write optimized database code:
+- Schema design: normalization, indexing, constraints
+- Queries: JOINs, subqueries, CTEs, window functions
+- Migrations: safe schema changes, rollback strategies
+- Performance: EXPLAIN ANALYZE, index optimization
+- Prisma/Drizzle: proper models, queries, transactions
+- Show COMPLETE schema, migrations, and query code`,
+
+    'docker-patterns': `═══ DEVOPS/DOCKER ACTIVATED ═══
+Write deployment configurations:
+- Docker: multi-stage builds, minimal images, health checks
+- Docker Compose: service orchestration, networking, volumes
+- CI/CD: GitHub Actions, automated testing, deployment
+- Kubernetes: deployments, services, ingress, configmaps
+- Security: image scanning, least privilege, secret management
+- Show COMPLETE Dockerfiles, compose files, CI configs`,
+
+    'springboot-patterns': `═══ SPRING BOOT DEVELOPMENT ACTIVATED ═══
+Write production Spring Boot:
+- Layered architecture: Controller → Service → Repository
+- Dependency injection, proper bean scoping
+- JPA/Hibernate: entity design, queries, transactions
+- REST: proper response types, validation, error handling
+- Security: Spring Security, JWT, method-level authorization
+- Testing: @SpringBootTest, MockMvc, Testcontainers
+- Show COMPLETE Java code with proper annotations`,
+
+    'kotlin-patterns': `═══ KOTLIN DEVELOPMENT ACTIVATED ═══
+Write idiomatic Kotlin:
+- Null safety, data classes, sealed classes, extensions
+- Coroutines: structured concurrency, Flow, Channels
+- Android: Jetpack Compose, ViewModel, Room
+- Testing: Kotest, MockK, coroutine testing
+- Show COMPLETE working code with proper Kotlin idioms`,
+
+    'dart-flutter-patterns': `═══ FLUTTER/DART DEVELOPMENT ACTIVATED ═══
+Write production Flutter/Dart:
+- Null safety, immutable state, async composition
+- BLoC/Riverpod state management
+- GoRouter navigation, Dio networking
+- Widget architecture, responsive design
+- Show COMPLETE working widgets with state management`,
+
+    'cpp-coding-standards': `═══ C++ DEVELOPMENT ACTIVATED ═══
+Write modern, safe C++:
+- C++17/20 features: smart pointers, std::optional, structured bindings
+- RAII, rule of five, move semantics
+- Templates with concepts, constexpr where possible
+- Error handling: exceptions, std::expected (C++23)
+- Testing: GoogleTest/CTest, CMake configuration
+- Show COMPLETE working code with proper CMake setup`,
+
+    'swiftui-patterns': `═══ SWIFT/SWIFTUI DEVELOPMENT ACTIVATED ═══
+Write modern Swift/SwiftUI:
+- Swift concurrency: async/await, actors, Sendable
+- SwiftUI: declarative views, environment, observation
+- Data flow: @Observable, @Bindable, .environment
+- Testing: Swift Testing framework, XCTest
+- Show COMPLETE working code with proper Swift concurrency`,
+
+    'laravel-patterns': `═══ LARAVEL DEVELOPMENT ACTIVATED ═══
+Write production Laravel:
+- Architecture: Service layer, repositories, form requests
+- Eloquent: relationships, scopes, accessors/mutators
+- Routes: resource controllers, middleware, API routes
+- Testing: PHPUnit/Pest, factories, database assertions
+- Show COMPLETE working code with proper Laravel patterns`,
+
+    'perl-patterns': `═══ PERL DEVELOPMENT ACTIVATED ═══
+Write modern Perl 5.36+:
+- Use strict/warnings, signatures, postfix dereference
+- Moose/Moo for OOP, Type::Tiny for validation
+- Testing: Test2::V0, Test::More, prove
+- Show COMPLETE working code with proper Perl idioms`,
+
+    'design-system': `═══ DESIGN SYSTEM ACTIVATED ═══
+Create and audit design systems:
+- Visual consistency: colors, typography, spacing, borders
+- Component architecture: variants, states, composition
+- Token system: design tokens, theme variables
+- Accessibility: WCAG compliance, contrast ratios
+- Documentation: usage guidelines, do/don't examples`,
+
+    'finance': `═══ FINANCE ANALYSIS ACTIVATED ═══
+Provide financial analysis:
+- Market data: stock prices, financials, fundamentals
+- Investment analysis: valuation, risk, returns
+- Portfolio: allocation, diversification, rebalancing
+- Regulations: compliance, reporting requirements
+- Always include disclaimers about financial advice`,
+
+    'seo': `═══ SEO OPTIMIZATION ACTIVATED ═══
+Optimize for search engines:
+- Technical: Core Web Vitals, crawlability, indexing
+- On-page: meta tags, headings, structured data, keywords
+- Content: quality signals, E-E-A-T, topical authority
+- Architecture: sitemaps, robots.txt, internal linking
+- Provide specific, actionable recommendations with code examples`,
+
+    'image-generation': `═══ IMAGE GENERATION ACTIVATED ═══
+Help create visual content:
+- Describe the image generation process
+- Provide detailed prompts for image generation
+- Explain design principles and composition
+- Suggest styles, techniques, and approaches`,
+
+    'web-search': `═══ WEB SEARCH ACTIVATED ═══
+Help with web research:
+- Formulate effective search queries
+- Analyze and synthesize search results
+- Verify information from multiple sources
+- Cite sources and provide evidence`,
+  };
+
+  return map[skill] || `═══ ${skill.toUpperCase()} SKILL ACTIVATED ═══
+Apply your expert knowledge of this domain. Give complete, detailed, professional responses. Never truncate.`;
+}
+
+function getAgentInstructions(agent: string): string {
+  const map: Record<string, string> = {
+    'architecture': `You are the Architecture Agent. Focus on system design, scalability, and technical decisions. Provide component diagrams, data flow, and trade-off analysis.`,
+    'review': `You are the Code Review Agent. Focus on quality, security, and maintainability. Give specific, actionable feedback with severity ratings.`,
+    'build': `You are the Build/Fix Agent. Focus on resolving errors with minimal diffs. Identify root cause → apply targeted fix → verify solution works.`,
+    'security': `You are the Security Agent. Detect vulnerabilities and recommend remediation. Prioritize by severity: CRITICAL > HIGH > MEDIUM > LOW.`,
+    'quality': `You are the Quality Agent. Focus on code clarity, consistency, and correctness. Enforce coding standards and best practices.`,
+    'testing': `You are the Testing Agent. Focus on test coverage, TDD methodology, and behavioral testing. Write comprehensive test suites.`,
+    'docs': `You are the Documentation Agent. Focus on clarity, accuracy, and completeness. Write professional documentation.`,
+    'operations': `You are the Operations Agent. Focus on business workflows and operational efficiency.`,
+    'infrastructure': `You are the Infrastructure Agent. Focus on reliability, cost optimization, and system configuration.`,
+  };
+
+  return map[agent] || `You are the ${agent} agent. Apply its specialized capabilities. Give complete, professional responses.`;
+}
+
+// ── Main POST handler ──
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
 
-  // Helper: send an SSE event on the controller
   const sse = (controller: ReadableStreamDefaultController, data: Record<string, unknown>) => {
     try {
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
-    } catch {
-      // controller may be closed
-    }
+    } catch { /* controller may be closed */ }
   };
 
-  // Create the ReadableStream immediately so we can start sending events
-  // BEFORE doing the slow autoRoute LLM call. This prevents connection drops.
   const stream = new ReadableStream({
     async start(controller) {
       let fullContent = '';
       let usageData: Record<string, number> | undefined;
 
       try {
-        // ── 1. Parse request body ──
+        // ── 1. Parse request ──
         let body: Record<string, unknown>;
         try {
           body = await req.json();
@@ -60,50 +417,48 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // ── 2. Send a "thinking" event immediately so the client knows we're alive ──
+        // ── 2. Send thinking status ──
         sse(controller, { status: 'thinking', content: '', done: false });
 
-        // ── 3. Auto-route (may take 5-15 seconds, but we already sent a heartbeat) ──
+        // ── 3. Fast route (keyword-based, instant, no LLM call) ──
         let skill = explicitSkill || undefined;
         let agent = explicitAgent || undefined;
-        let autoRouted = false;
-        let autoRouteName = '';
+        let routeName = '';
         let routeModelHint: 'auto' | 'coder' = 'auto';
 
         if (!skill && !agent) {
-          // Send a routing status so the client can show "Selecting skill..."
-          sse(controller, { status: 'routing', content: '', done: false });
-
-          const routeResult = await autoRoute(messages);
-          if (routeResult.type === 'skill') {
-            skill = routeResult.route;
-            autoRouteName = routeResult.name;
-            autoRouted = true;
-          } else if (routeResult.type === 'agent') {
-            agent = routeResult.route;
-            autoRouteName = routeResult.name;
-            autoRouted = true;
-          }
-          routeModelHint = routeResult.modelHint;
-
-          // Tell the client which skill/agent was auto-selected
-          if (autoRouted && autoRouteName) {
-            sse(controller, {
-              route: autoRouteName,
-              routeType: skill ? 'skill' : 'agent',
-              routeId: skill || agent || '',
-            });
+          const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
+          if (lastUserMsg) {
+            const routeResult = fastRoute(lastUserMsg.content);
+            if (routeResult.type === 'skill') {
+              skill = routeResult.route;
+              routeName = routeResult.name;
+            } else if (routeResult.type === 'agent') {
+              agent = routeResult.route;
+              routeName = routeResult.name;
+            }
+            routeModelHint = routeResult.modelHint;
           }
         } else {
-          // If skill/agent explicitly selected, detect if it's coding-related
+          // Explicit skill/agent — check if coding-related
           const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-          if (lastUserMsg && isCodingMessage(lastUserMsg.content)) {
-            routeModelHint = 'coder';
+          if (lastUserMsg) {
+            const routeResult = fastRoute(lastUserMsg.content);
+            routeModelHint = routeResult.modelHint;
           }
         }
 
-        // ── 4. Build system prompt with skill/agent context ──
-        const systemPrompt = await buildSystemPrompt(skill, agent);
+        // Tell client which skill/agent was selected
+        if (routeName) {
+          sse(controller, {
+            route: routeName,
+            routeType: skill ? 'skill' : 'agent',
+            routeId: skill || agent || '',
+          });
+        }
+
+        // ── 4. Build system prompt ──
+        const systemPrompt = buildSystemPrompt(skill, agent);
         const apiMessages = [
           { role: 'system' as const, content: systemPrompt },
           ...messages.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -113,18 +468,19 @@ export async function POST(req: NextRequest) {
         sse(controller, { status: 'generating', content: '', done: false });
 
         const ai = await AIClient.create(routeModelHint);
-        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Hint: ${routeModelHint}`);
+        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Hint: ${routeModelHint}, Skill: ${skill || agent || 'general'}`);
+
         let completion: unknown = null;
         try {
           completion = await ai.chat({
             messages: apiMessages,
             temperature: 0.7,
-            max_tokens: 16384,
+            max_tokens: 8192,
             stream: true,
           });
         } catch (apiErr) {
-          // API init failed (e.g. auth error) — send error to client
           const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
+          console.error(`[Chat] API error: ${errMsg}`);
           sse(controller, { error: `[${ai.providerName}/${ai.modelName}] ${errMsg}`, done: true });
           controller.close();
           return;
@@ -136,7 +492,7 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // Handle non-streaming JSON response (Z.ai public API may return JSON instead of stream)
+        // Handle non-streaming JSON response
         if (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream)) {
           const resp = completion as Record<string, unknown>;
           if (resp.error) {
@@ -154,6 +510,7 @@ export async function POST(req: NextRequest) {
           return;
         }
 
+        // ── 6. Parse streaming response ──
         let sseBuffer = '';
         let lastKeepalive = Date.now();
 
@@ -171,7 +528,6 @@ export async function POST(req: NextRequest) {
           }
 
           sseBuffer += text;
-
           const lines = sseBuffer.split('\n');
           sseBuffer = lines.pop() || '';
 
@@ -181,7 +537,6 @@ export async function POST(req: NextRequest) {
 
             const dataStr = trimmed.slice(5).trim();
             if (dataStr === '[DONE]') {
-              // Save to DB in background
               if (conversationId && fullContent) {
                 saveMessages(conversationId, messages, fullContent, skill || agent).catch(() => {});
               }
@@ -202,15 +557,16 @@ export async function POST(req: NextRequest) {
                 lastKeepalive = Date.now();
               }
 
-              if (usage) {
-                usageData = usage;
-              }
+              if (usage) usageData = usage;
 
-              if (finishReason === 'stop') {
+              if (finishReason === 'stop' || finishReason === 'length') {
                 if (conversationId && fullContent) {
                   saveMessages(conversationId, messages, fullContent, skill || agent).catch(() => {});
                 }
-                sse(controller, { content: '', done: true, usage: usageData || { total_tokens: 0 } });
+                // If finish_reason is 'length', the response was truncated
+                // Add a note so the user knows
+                const truncationNote = finishReason === 'length' ? '\n\n⚠️ Response was cut off due to length limit. Ask me to continue and I will complete the rest.' : '';
+                sse(controller, { content: truncationNote, done: true, usage: usageData || { total_tokens: 0 }, finishReason });
                 controller.close();
                 return;
               }
@@ -219,18 +575,16 @@ export async function POST(req: NextRequest) {
             }
           }
 
-          // Send keepalive comment every 10 seconds to prevent connection drop
+          // Keepalive every 10 seconds
           if (Date.now() - lastKeepalive > 10000) {
             try {
               controller.enqueue(encoder.encode(': keepalive\n\n'));
               lastKeepalive = Date.now();
-            } catch {
-              // controller may be closed
-            }
+            } catch { /* controller may be closed */ }
           }
         }
 
-        // Stream ended normally (no explicit [DONE] or finish_reason)
+        // Stream ended normally
         if (conversationId && fullContent) {
           saveMessages(conversationId, messages, fullContent, skill || agent).catch(() => {});
         }
@@ -239,16 +593,8 @@ export async function POST(req: NextRequest) {
       } catch (streamErr) {
         const errMsg = streamErr instanceof Error ? streamErr.message : 'Stream error';
         console.error('[Chat Stream Error]', errMsg);
-        try {
-          sse(controller, { error: errMsg, done: true });
-        } catch {
-          // Controller may already be closed
-        }
-        try {
-          controller.close();
-        } catch {
-          // Already closed
-        }
+        try { sse(controller, { error: errMsg, done: true }); } catch { /* */ }
+        try { controller.close(); } catch { /* */ }
       }
     },
   });
@@ -263,162 +609,7 @@ export async function POST(req: NextRequest) {
   });
 }
 
-// ── Auto-route: use the LLM to classify the best skill/agent for the user's message ──
-async function autoRoute(messages: Array<{ role: string; content: string }>): Promise<{ route: string; type: 'skill' | 'agent' | 'none'; name: string; modelHint: 'auto' | 'coder' }> {
-  try {
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-    if (!lastUserMsg) return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
-
-    const content = lastUserMsg.content.toLowerCase();
-
-    // ── Fast keyword-based shortcuts (no LLM call needed) ──
-    // Simple greetings / casual chat — skip routing entirely
-    if (/^(hi|hello|hey|greetings|good\s*(morning|afternoon|evening)|howdy|sup|yo|what'?s\s*up|hola)[\s!.?]*$/i.test(content) || content.length < 10 && /^(thanks|thank you|ok|okay|bye|goodbye|sure|yes|no|maybe)[\s!.?]*$/i.test(content)) {
-      return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
-    }
-    if (/\b(generate|create|draw|make)\b.*\b(image|picture|photo|illustration|artwork)\b/.test(content)) {
-      const s = SKILLS.find((s) => s.id === 'image-generation');
-      return { route: 'image-generation', type: 'skill', name: s?.name || 'Image Generation', modelHint: 'auto' };
-    }
-    if (/^\s*(search|find|look up|google)\b/i.test(content) || /\bweb\s*search\b/i.test(content)) {
-      const s = SKILLS.find((s) => s.id === 'web-search');
-      return { route: 'web-search', type: 'skill', name: s?.name || 'Web Search', modelHint: 'auto' };
-    }
-
-    // ── Code-related shortcuts ── These use the coder model
-    // Broad coding detection — any message about programming should use coder model
-    if (isCodingMessage(content)) {
-      // Specific coding sub-routes
-      if (/\b(review|code\s*review)\b/i.test(content)) {
-        return { route: 'code-review', type: 'skill', name: 'Code Review', modelHint: 'coder' };
-      }
-      if (/\b(security|vulnerability|exploit)\b/i.test(content)) {
-        return { route: 'security', type: 'skill', name: 'Security', modelHint: 'coder' };
-      }
-      if (/\b(test|testing|unit\s*test|tdd)\b/i.test(content)) {
-        return { route: 'tdd', type: 'skill', name: 'TDD / Testing', modelHint: 'coder' };
-      }
-
-      // Language-specific routing
-      if (/\b(python|django|flask|pytest|pip)\b/i.test(content)) {
-        return { route: 'python-patterns', type: 'skill', name: 'Python Development', modelHint: 'coder' };
-      }
-      if (/\b(rust|cargo|borrow|ownership|lifetime)\b/i.test(content)) {
-        return { route: 'rust-patterns', type: 'skill', name: 'Rust Development', modelHint: 'coder' };
-      }
-      if (/\b(golang|go\s*lang|goroutine|channel|go\s*mod)\b/i.test(content)) {
-        return { route: 'golang-patterns', type: 'skill', name: 'Go Development', modelHint: 'coder' };
-      }
-      if (/\b(typescript|react|next\.?js|node\.?js|tsx|jsx|npm|yarn|vite|webpack)\b/i.test(content)) {
-        return { route: 'fullstack-dev', type: 'skill', name: 'Fullstack Development', modelHint: 'coder' };
-      }
-      if (/\b(java|spring|jpa|hibernate|maven|gradle)\b/i.test(content)) {
-        return { route: 'springboot-patterns', type: 'skill', name: 'Spring Boot', modelHint: 'coder' };
-      }
-      if (/\b(kotlin|android|jetpack|compose)\b/i.test(content)) {
-        return { route: 'kotlin-patterns', type: 'skill', name: 'Kotlin Development', modelHint: 'coder' };
-      }
-      if (/\b(c\+\+|cmake|g\+\+|clang)\b/i.test(content)) {
-        return { route: 'cpp-coding-standards', type: 'skill', name: 'C++ Coding', modelHint: 'coder' };
-      }
-      if (/\b(swift|ios|swiftui|xcode)\b/i.test(content)) {
-        return { route: 'swiftui-patterns', type: 'skill', name: 'SwiftUI', modelHint: 'coder' };
-      }
-      if (/\b(laravel|php|artisan|blade|eloquent)\b/i.test(content)) {
-        return { route: 'laravel-patterns', type: 'skill', name: 'Laravel', modelHint: 'coder' };
-      }
-      if (/\b(flutter|dart|widget|pub)\b/i.test(content)) {
-        return { route: 'dart-flutter-patterns', type: 'skill', name: 'Flutter/Dart', modelHint: 'coder' };
-      }
-      if (/\b(perl|cpan)\b/i.test(content)) {
-        return { route: 'perl-patterns', type: 'skill', name: 'Perl', modelHint: 'coder' };
-      }
-      if (/\b(database|sql|postgres|mysql|prisma|drizzle|query|schema)\b/i.test(content)) {
-        return { route: 'postgres-patterns', type: 'skill', name: 'Database', modelHint: 'coder' };
-      }
-      if (/\b(docker|kubernetes|deploy|ci.?cd|github\s*actions)\b/i.test(content)) {
-        return { route: 'devops', type: 'skill', name: 'DevOps', modelHint: 'coder' };
-      }
-
-      // General code request — fullstack-dev as default
-      if (/\b(code|program|function|script|debug|fix\s*bug|refactor|build|implement|create\s*app|develop)\b/i.test(content)) {
-        return { route: 'fullstack-dev', type: 'skill', name: 'Fullstack Development', modelHint: 'coder' };
-      }
-
-      // Any other coding message
-      return { route: 'fullstack-dev', type: 'skill', name: 'Fullstack Development', modelHint: 'coder' };
-    }
-
-    // ── Non-coding shortcuts ──
-    if (/\b(write|essay|article|blog|content|email|letter)\b/i.test(content)) {
-      return { route: 'writer', type: 'skill', name: 'Writer', modelHint: 'auto' };
-    }
-    if (/\b(analyz|research|investigate|study|compare)\b/i.test(content)) {
-      return { route: 'researcher', type: 'skill', name: 'Researcher', modelHint: 'auto' };
-    }
-    if (/\b(architect|design\s*system|system\s*design|scalability)\b/i.test(content)) {
-      return { route: 'architect', type: 'skill', name: 'Architect', modelHint: 'coder' };
-    }
-    if (/\b(plan|roadmap|milestone|phase|break\s*down)\b/i.test(content)) {
-      return { route: 'planner', type: 'skill', name: 'Planner', modelHint: 'auto' };
-    }
-
-    // ── LLM-based routing for ambiguous cases ──
-    // Only include top skills/agents to keep the classifier prompt small and fast
-    const topSkills = SKILLS.filter((s) =>
-      ['fullstack-dev', 'code-review', 'tdd', 'security', 'architect', 'writer', 'researcher', 'devops', 'planner', 'image-generation', 'web-search', 'python-patterns', 'rust-patterns', 'golang-patterns', 'frontend-patterns', 'backend-patterns', 'api-design'].includes(s.id)
-    );
-    const topAgents = AGENTS.slice(0, 20);
-
-    const catalogLines = [
-      ...topSkills.map((s) => `S:${s.id}|${s.name}|${s.category}|${s.description.slice(0, 60)}`),
-      ...topAgents.map((a) => `A:${a.id}|${a.name}|${a.category}|${a.description.slice(0, 60)}`),
-    ].join('\n');
-
-    const classifierPrompt = `You are a routing classifier. Given a user message, select the SINGLE best skill (S:) or agent (A:) to handle it.
-
-Catalog:
-${catalogLines}
-
-Rules:
-- Reply with ONLY the ID (e.g. "code-reviewer" or "architect"). No explanation, no quotes.
-- For general conversation, casual chat, greetings, or unclear topics, reply: general
-- Default to "general" if uncertain`;
-
-    const ai = await AIClient.create('auto');
-    const completion = await ai.chat({
-      messages: [
-        { role: 'system', content: classifierPrompt },
-        { role: 'user', content: lastUserMsg.content.slice(0, 500) },
-      ],
-      temperature: 0,
-      max_tokens: 30,
-    });
-
-    let rawRoute = (completion?.choices?.[0]?.message?.content || 'general').trim().toLowerCase();
-    rawRoute = rawRoute.replace(/^["'`]+|["'`]+$/g, '');
-
-    const isSkill = SKILLS.some((s) => s.id === rawRoute);
-    const isAgent = AGENTS.some((a) => a.id === rawRoute);
-
-    if (isSkill) {
-      const s = SKILLS.find((s) => s.id === rawRoute)!;
-      const modelHint: 'auto' | 'coder' = ['fullstack-dev', 'code-review', 'tdd', 'security', 'architect', 'python-patterns', 'rust-patterns', 'golang-patterns', 'frontend-patterns', 'backend-patterns', 'api-design'].includes(rawRoute) ? 'coder' : 'auto';
-      return { route: rawRoute, type: 'skill', name: s.name, modelHint };
-    } else if (isAgent) {
-      const a = AGENTS.find((a) => a.id === rawRoute)!;
-      const modelHint: 'auto' | 'coder' = ['architecture', 'review', 'build', 'security', 'quality', 'testing'].includes(a.category) ? 'coder' : 'auto';
-      return { route: rawRoute, type: 'agent', name: a.name, modelHint };
-    }
-
-    return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
-  } catch (e) {
-    console.error('[AutoRoute Error]', e instanceof Error ? e.message : 'Unknown');
-    return { route: 'general', type: 'none', name: '', modelHint: 'auto' };
-  }
-}
-
-// ── Separate DB save function ──
+// ── Save messages to DB ──
 async function saveMessages(
   conversationId: string,
   messages: Array<{ role: string; content: string }>,
@@ -426,7 +617,7 @@ async function saveMessages(
   skillName?: string | null,
 ) {
   try {
-    if (!db) return; // No database available (e.g. Vercel without DB)
+    if (!db) return;
     const last = messages[messages.length - 1];
     await db.message.create({
       data: { conversationId, role: last.role, content: last.content, skill: skillName || null },
@@ -441,270 +632,4 @@ async function saveMessages(
   } catch {
     // Database errors should not break the chat response
   }
-}
-
-async function buildSystemPrompt(skill?: string, agent?: string): Promise<string> {
-  // ── Build a COMPACT skills/agents summary (NOT full listing — saves tokens for response) ──
-  // Count skills per category for a brief overview
-  const skillCounts: Record<string, number> = {};
-  for (const s of SKILLS) {
-    skillCounts[s.category] = (skillCounts[s.category] || 0) + 1;
-  }
-  const agentCounts: Record<string, number> = {};
-  for (const a of AGENTS) {
-    agentCounts[a.category] = (agentCounts[a.category] || 0) + 1;
-  }
-
-  // One-line category summary instead of listing every skill
-  const skillSummary = Object.entries(skillCounts)
-    .map(([cat, count]) => `${cat}(${count})`)
-    .join(', ');
-
-  const agentSummary = Object.entries(agentCounts)
-    .map(([cat, count]) => `${cat}(${count})`)
-    .join(', ');
-
-  // Top skills the AI should know about by name (most commonly requested)
-  const topSkillNames = 'fullstack-dev, python-patterns, rust-patterns, golang-patterns, frontend-patterns, backend-patterns, code-review, tdd, security, architect, writer, researcher, planner, devops, api-design, database-migrations, docker-patterns, e2e-testing, image-generation, web-search';
-
-  const base = `You are Z, a powerful personal AI assistant. You are NOT ChatGPT, NOT OpenAI, NOT GPT — you are Z.
-
-Identity: Z | Expert AI Assistant | 227 skills | 47 agents
-Skills by category: ${skillSummary}
-Agents by category: ${agentSummary}
-Key skills: ${topSkillNames}
-
-Rules:
-- Say "I am Z" if asked who you are. NEVER claim to be ChatGPT/GPT/OpenAI.
-- CODING: Write complete, working code with imports, types, error handling. Show FULL code blocks, not snippets. Never cut off mid-code.
-- WRITING: Rich, detailed content. 3-5+ sentences per paragraph.
-- RESEARCH: Evidence-based analysis with specific details.
-- ALWAYS give COMPLETE answers. If writing code, include the FULL implementation.
-- When code is long, use multiple code blocks instead of truncating.`;
-
-  let extra = '';
-
-  // Load skill instructions
-  if (skill) {
-    // Extended skill map with much richer instructions
-    const skillMap: Record<string, string> = {
-      'code-review': `
-
-═══ CODE REVIEW MODE ═══
-You are performing expert code review. For every piece of code:
-1. SECURITY: Check for injection, auth bypass, data leaks, OWASP Top 10
-2. PERFORMANCE: Check for N+1 queries, memory leaks, unnecessary re-renders, O(n^2) algorithms
-3. QUALITY: Check for error handling, edge cases, naming, DRY violations
-4. MAINTAINABILITY: Check for proper typing, documentation, separation of concerns
-5. CORRECTNESS: Check for race conditions, null pointer errors, off-by-one errors
-
-Format findings as:
-[SEVERITY: CRITICAL/HIGH/MEDIUM/LOW] Issue description
-→ Suggested fix with code example`,
-
-      'tdd': `
-
-═══ TDD MODE ═══
-You are using Test-Driven Development. Follow this workflow:
-1. RED: Write a failing test that describes the desired behavior
-2. GREEN: Write the minimal code to make the test pass
-3. REFACTOR: Improve the code while keeping tests green
-4. Target 80%+ test coverage
-5. Use descriptive test names: "should [expected behavior] when [condition]"
-6. Test edge cases: null, undefined, empty, boundary values, error states`,
-
-      'architect': `
-
-═══ ARCHITECT MODE ═══
-You are designing system architecture. Address:
-1. REQUIREMENTS: Functional and non-functional requirements
-2. HIGH-LEVEL DESIGN: Component diagram, data flow, API boundaries
-3. TECHNOLOGY SELECTION: Justify choices with trade-offs
-4. SCALABILITY: Horizontal/vertical scaling, caching, load balancing
-5. RELIABILITY: Error handling, retry logic, circuit breakers, graceful degradation
-6. SECURITY: Authentication, authorization, data encryption, audit logging
-7. PERFORMANCE: Latency targets, throughput, resource utilization
-8. ARCHITECTURE DECISION RECORDS (ADR): Document key decisions with context, decision, and consequences`,
-
-      'security': `
-
-═══ SECURITY MODE ═══
-You are performing security analysis. Check for:
-1. INJECTION: SQL injection, XSS, command injection, LDAP injection
-2. AUTH: Broken authentication, session management, credential stuffing
-3. DATA EXPOSURE: Sensitive data in logs, URLs, error messages, client-side storage
-4. ACCESS CONTROL: IDOR, privilege escalation, missing authorization checks
-5. CRYPTO: Weak algorithms, hardcoded keys, improper IV usage, timing attacks
-6. DEPENDENCIES: Known CVEs, outdated packages, supply chain risks
-7. CONFIGURATION: Default credentials, open ports, debug endpoints, CORS misconfiguration
-8. Rate severity: CRITICAL (data breach risk) > HIGH (auth bypass) > MEDIUM (info leak) > LOW (best practice)`,
-
-      'planner': `
-
-═══ PLANNER MODE ═══
-You are creating an implementation plan. Structure:
-1. OBJECTIVE: Clear, measurable goal
-2. PHASES: Break into 2-5 phases with dependencies
-3. TASKS: Each phase has specific, actionable tasks with acceptance criteria
-4. RISKS: Identify risks and mitigation strategies
-5. ESTIMATES: Rough effort estimates for each phase
-6. ORDER: Explicit task ordering with what blocks what`,
-
-      'writer': `
-
-═══ WRITER MODE ═══
-You are creating written content. Guidelines:
-1. STRUCTURE: Clear intro, well-organized body, meaningful conclusion
-2. DEPTH: Every paragraph must be 3-5+ sentences. No shallow content.
-3. ENGAGEMENT: Hook the reader, maintain interest, deliver value
-4. TONE: Adapt to the audience — professional, casual, technical, or creative
-5. EXAMPLES: Include specific examples, data points, or case studies
-6. CLARITY: Explain complex concepts simply without dumbing down`,
-
-      'researcher': `
-
-═══ RESEARCHER MODE ═══
-You are conducting research. Approach:
-1. QUESTION: Clearly define what you're investigating
-2. SOURCES: Cite specific evidence and data points
-3. ANALYSIS: Compare perspectives, identify patterns, highlight contradictions
-4. SYNTHESIS: Draw conclusions supported by evidence
-5. RECOMMENDATIONS: Provide actionable next steps
-6. LIMITATIONS: Acknowledge what you don't know or can't verify`,
-
-      'fullstack-dev': `
-
-═══ FULLSTACK DEVELOPMENT MODE ═══
-You are a fullstack expert. Write production-quality code following these rules:
-1. TYPESCRIPT FIRST: Always use TypeScript with proper types, interfaces, and generics
-2. MODERN REACT: Use function components, hooks, Server Components where appropriate
-3. NEXT.JS PATTERNS: App Router, Server Actions, streaming, proper data fetching
-4. API DESIGN: RESTful, proper status codes, error responses, input validation
-5. DATABASE: Use Prisma/Drizzle with proper schema, migrations, and queries
-6. ERROR HANDLING: Try-catch, proper error types, user-friendly messages
-7. SECURITY: Input validation, sanitization, parameterized queries, CORS
-8. PERFORMANCE: Lazy loading, code splitting, caching, optimistic updates
-9. Include COMPLETE working code — imports, types, exports, everything needed to run
-10. Always explain the approach before showing code`,
-
-      'python-patterns': `
-
-═══ PYTHON DEVELOPMENT MODE ═══
-You are a Python expert. Write idiomatic, production-quality Python:
-1. PEP 8: Follow style guide, use type hints, docstrings
-2. PATTERNS: Use dataclasses, enums, protocols, context managers, generators
-3. ASYNC: Use asyncio for I/O-bound, multiprocessing for CPU-bound
-4. ERROR HANDLING: Custom exceptions, proper exception chaining, logging
-5. TESTING: pytest with fixtures, parametrize, mock where needed
-6. PACKAGING: pyproject.toml, proper dependency management, virtual environments
-7. Include complete working code with imports and type hints`,
-
-      'rust-patterns': `
-
-═══ RUST DEVELOPMENT MODE ═══
-You are a Rust expert. Write safe, idiomatic Rust:
-1. OWNERSHIP: Proper borrow checker usage, lifetimes where needed
-2. ERROR HANDLING: Result<T,E>, thiserror/anyhow, never panic in libraries
-3. CONCURRENCY: Send/Sync traits, channels, async with tokio
-4. PATTERNS: Builder pattern, newtype, trait objects, generics with trait bounds
-5. TESTING: #[test], #[tokio::test], property-based testing with proptest
-6. Include complete working code with proper Cargo.toml dependencies`,
-
-      'golang-patterns': `
-
-═══ GO DEVELOPMENT MODE ═══
-You are a Go expert. Write idiomatic, production-quality Go:
-1. IDIOMS: Effective Go patterns, proper error handling, context propagation
-2. CONCURRENCY: Goroutines, channels, select, sync primitives
-3. INTERFACES: Small, focused interfaces, composition over inheritance
-4. TESTING: Table-driven tests, testify assertions, integration tests
-5. PROJECT: Proper package structure, go modules, dependency injection
-6. Include complete working code with proper module declarations`,
-
-      'frontend-patterns': `
-
-═══ FRONTEND DEVELOPMENT MODE ═══
-You are a frontend expert. Write modern, performant UI code:
-1. REACT: Hooks, Server Components, proper state management, memoization
-2. STYLING: Tailwind CSS, responsive design, dark mode support
-3. PERFORMANCE: Code splitting, lazy loading, image optimization, Lighthouse scores
-4. ACCESSIBILITY: ARIA attributes, keyboard navigation, screen reader support
-5. TYPESCRIPT: Strict mode, proper component types, generic components
-6. Include complete working components with types and styling`,
-
-      'backend-patterns': `
-
-═══ BACKEND DEVELOPMENT MODE ═══
-You are a backend expert. Write scalable, reliable server code:
-1. API DESIGN: RESTful, versioned, proper HTTP methods and status codes
-2. DATABASE: Connection pooling, query optimization, transactions, migrations
-3. AUTH: JWT, OAuth2, session management, RBAC
-4. MIDDLEWARE: Logging, rate limiting, CORS, request validation
-5. ERROR HANDLING: Centralized error handler, proper error responses
-6. Include complete working code with proper error handling and types`,
-    };
-
-    if (skillMap[skill]) {
-      extra += skillMap[skill];
-    } else {
-      try {
-        const skillContent = await getSkillContent(skill);
-        if (skillContent) {
-          extra += `\n\n[ACTIVE SKILL: ${skill}]\n${skillContent.slice(0, 4000)}`;
-        }
-      } catch {
-        const skillInfo = SKILLS.find((s) => s.id === skill);
-        const categoryHints: Record<string, string> = {
-          'ai-core': '\n\nAI CORE mode: Focus on AI/ML implementation, model integration, and LLM patterns.',
-          'blockchain': '\n\nBLOCKCHAIN mode: Focus on Web3, smart contracts, and cryptographic correctness.',
-          'communication': '\n\nCOMMUNICATION mode: Focus on email, messaging, and notification workflows.',
-          'data': '\n\nDATA mode: Focus on databases, analytics, data pipelines, and visualization.',
-          'design': '\n\nDESIGN mode: Focus on UI/UX, visual systems, and frontend aesthetics.',
-          'development': '\n\nDEVELOPMENT mode: Focus on code quality, patterns, and best practices. Write production-quality code with proper error handling and types.',
-          'devops': '\n\nDEVOPS mode: Focus on CI/CD, deployment, monitoring, and automation.',
-          'education': '\n\nEDUCATION mode: Focus on learning, documentation, and knowledge sharing.',
-          'finance': '\n\nFINANCE mode: Focus on financial data, billing, markets, and compliance.',
-          'health': '\n\nHEALTH mode: Focus on healthcare, wellness, and clinical safety.',
-          'marketing': '\n\nMARKETING mode: Focus on growth, outreach, lead generation, and social strategy.',
-          'media': '\n\nMEDIA mode: Focus on image, video, and audio generation and processing.',
-          'operations': '\n\nOPERATIONS mode: Focus on business operations, logistics, and efficiency.',
-          'productivity': '\n\nPRODUCTIVITY mode: Focus on workflow optimization and automation.',
-          'research': '\n\nRESEARCH mode: Focus on deep investigation, evidence gathering, and analysis.',
-          'security': '\n\nSECURITY mode: Focus on vulnerability detection, compliance, and secure coding.',
-          'writing': '\n\nWRITING mode: Focus on content creation, editing, and communication. Write rich, detailed, engaging content.',
-        };
-        if (skillInfo) {
-          extra += categoryHints[skillInfo.category] || `\n\nYou are operating with the "${skill}" skill activated. Apply its specialized knowledge and patterns.`;
-        }
-      }
-    }
-  }
-
-  // Load agent instructions
-  if (agent) {
-    try {
-      const agentContent = await getAgentContent(agent);
-      if (agentContent) {
-        extra += `\n\n[ACTIVE AGENT: ${agent}]\n${agentContent.slice(0, 4000)}`;
-      }
-    } catch {
-      const agentInfo = AGENTS.find((a) => a.id === agent);
-      const agentCategoryHints: Record<string, string> = {
-        'architecture': '\n\nYou are acting as an architecture specialist agent. Focus on system design, scalability, and technical decisions.',
-        'review': '\n\nYou are acting as a code review agent. Focus on quality, security, and maintainability. Provide specific, actionable feedback.',
-        'build': '\n\nYou are acting as a build/fix agent. Focus on resolving errors with minimal diffs. Identify root cause, apply targeted fix, verify.',
-        'security': '\n\nYou are acting as a security agent. Detect vulnerabilities and recommend remediation. Prioritize by severity.',
-        'quality': '\n\nYou are acting as a quality agent. Focus on code clarity, consistency, and correctness.',
-        'testing': '\n\nYou are acting as a testing agent. Focus on test coverage, TDD methodology, and behavioral testing.',
-        'docs': '\n\nYou are acting as a documentation agent. Focus on clarity, accuracy, and completeness.',
-        'operations': '\n\nYou are acting as an operations agent. Focus on business workflows and efficiency.',
-        'infrastructure': '\n\nYou are acting as an infrastructure agent. Focus on reliability, cost optimization, and system configuration.',
-      };
-      if (agentInfo) {
-        extra += agentCategoryHints[agentInfo.category] || `\n\nYou are operating as the "${agent}" agent. Apply its specialized capabilities.`;
-      }
-    }
-  }
-
-  return base + extra;
 }
