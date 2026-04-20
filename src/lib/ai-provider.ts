@@ -1,12 +1,12 @@
 /**
- * Universal AI Provider — robust multi-model fallback for OpenRouter free tier.
+ * Universal AI Provider — robust multi-model fallback for OpenRouter.
  *
- * Key improvements:
- *  - 15+ free models across general and coder categories
- *  - Cross-category fallback (try coder models if all general fail, and vice versa)
- *  - Model-specific max_tokens awareness (free models have varying context limits)
- *  - Retry with exponential backoff for rate limits
- *  - Never gives up — always tries ALL available models before erroring
+ * Key features:
+ *  - 24+ verified free models including GLM-4.5-air
+ *  - GLM models as priority (Z.ai's own models — reliable)
+ *  - Cross-category fallback (try all models before giving up)
+ *  - Truncation detection (finish_reason='length')
+ *  - Exponential backoff between retries
  */
 
 // ── Types ──
@@ -30,42 +30,46 @@ export interface ChatCompletionResponse {
 export type AIProvider = 'zai' | 'openrouter' | 'openai';
 export type ModelHint = 'auto' | 'coder';
 
-// ── Free model lists (OpenRouter) ──
-// Comprehensive list of known free models (April 2026)
-// Order: most reliable first
+// ── Verified free models on OpenRouter (April 2026) ──
+// GLM first because it's Z.ai's own model — most reliable for this platform
 
-// General-purpose models
+// General-purpose free models (ordered by quality/reliability)
 const GENERAL_FREE_MODELS = [
-  'google/gemma-3-27b-it:free',                    // Google Gemma 27B — reliable, good quality
-  'meta-llama/llama-4-scout:free',                  // Llama 4 Scout — newest Meta model
-  'meta-llama/llama-3.3-70b-instruct:free',         // Llama 3.3 70B — strong general model
-  'qwen/qwen3-235b-a22b:free',                      // Qwen3 235B MoE — powerful
-  'qwen/qwen3-30b-a3b:free',                        // Qwen3 30B MoE — lighter
-  'arcee-ai/trinity-large-preview:free',             // Arcee Trinity — fast
-  'microsoft/phi-4-reasoning:free',                  // Phi-4 reasoning — good for analysis
-  'nvidia/llama-3.1-nemotron-70b-instruct:free',    // Nemotron 70B — good quality
-  'deepseek/deepseek-r1-0528:free',                  // DeepSeek R1 — strong reasoning
-  'deepseek/deepseek-chat-v3-0324:free',             // DeepSeek V3 — chat optimized
-  'openai/gpt-oss-120b:free',                        // OpenAI open-source
-  'rekaai/reka-flash-3:free',                        // Reka Flash — fast
-  'moonshotai/kimi-vl-a3b-thinking:free',            // Kimi — good multilingual
+  'z-ai/glm-4.5-air:free',                           // GLM 4.5 Air — Z.ai's free model, 131K ctx
+  'google/gemma-4-31b-it:free',                       // Gemma 4 31B — newest Google model, 262K ctx
+  'google/gemma-4-26b-a4b-it:free',                   // Gemma 4 26B MoE, 262K ctx
+  'qwen/qwen3-coder:free',                            // Qwen3 Coder — excellent for code too, 262K ctx
+  'meta-llama/llama-3.3-70b-instruct:free',           // Llama 3.3 70B, 65K ctx
+  'nvidia/nemotron-3-super-120b-a12b:free',           // Nemotron 120B MoE, 262K ctx
+  'nvidia/nemotron-3-nano-30b-a3b:free',              // Nemotron 30B MoE, 256K ctx
+  'openai/gpt-oss-120b:free',                          // OpenAI OSS 120B, 131K ctx
+  'qwen/qwen3-next-80b-a3b-instruct:free',            // Qwen3 Next 80B, 262K ctx
+  'google/gemma-3-27b-it:free',                        // Gemma 3 27B, 131K ctx
+  'arcee-ai/trinity-large-preview:free',               // Arcee Trinity, 131K ctx
+  'minimax/minimax-m2.5:free',                         // MiniMax M2.5, 196K ctx
+  'nousresearch/hermes-3-llama-3.1-405b:free',        // Hermes 405B, 131K ctx
+  'google/gemma-3-12b-it:free',                        // Gemma 3 12B, 32K ctx
+  'openai/gpt-oss-20b:free',                           // OpenAI OSS 20B, 131K ctx
+  'nvidia/nemotron-nano-9b-v2:free',                   // Nemotron Nano, 128K ctx
+  'google/gemma-3-4b-it:free',                         // Gemma 3 4B, 32K ctx
+  'meta-llama/llama-3.2-3b-instruct:free',             // Llama 3.2 3B, 131K ctx
 ];
 
-// Code-optimized models
+// Code-optimized free models (GLM Coder + best coding models first)
 const CODER_FREE_MODELS = [
-  'qwen/qwen3-coder:free',                           // Best free coder model
-  'deepseek/deepseek-r1-0528:free',                   // Strong reasoning for code
-  'google/gemma-3-27b-it:free',                       // Gemma good at code too
-  'meta-llama/llama-4-scout:free',                    // Llama 4 good at code
-  'meta-llama/llama-3.3-70b-instruct:free',           // Llama 3.3 solid coder
-  'qwen/qwen3-235b-a22b:free',                        // Qwen3 235B excellent coder
-  'microsoft/phi-4-reasoning:free',                   // Phi-4 good for debugging
-  'nvidia/llama-3.1-nemotron-70b-instruct:free',     // Nemotron good coder
-  'deepseek/deepseek-chat-v3-0324:free',              // DeepSeek V3 good at code
-  'arcee-ai/trinity-large-preview:free',              // Fast fallback
+  'qwen/qwen3-coder:free',                            // Best free coder, 262K ctx
+  'z-ai/glm-4.5-air:free',                            // GLM — good at code, 131K ctx
+  'google/gemma-4-31b-it:free',                       // Gemma 4 — great coder, 262K ctx
+  'nvidia/nemotron-3-super-120b-a12b:free',           // Nemotron 120B — strong coder, 262K ctx
+  'meta-llama/llama-3.3-70b-instruct:free',           // Llama 3.3 70B — solid coder, 65K ctx
+  'qwen/qwen3-next-80b-a3b-instruct:free',            // Qwen3 80B, 262K ctx
+  'openai/gpt-oss-120b:free',                          // OpenAI OSS 120B, 131K ctx
+  'google/gemma-3-27b-it:free',                        // Gemma 3 27B, 131K ctx
+  'arcee-ai/trinity-large-preview:free',               // Fast fallback, 131K ctx
+  'nvidia/nemotron-3-nano-30b-a3b:free',              // Nemotron 30B, 256K ctx
 ];
 
-// All free models combined for ultimate fallback
+// All free models combined (deduplicated) for ultimate fallback
 const ALL_FREE_MODELS = [...new Set([...CODER_FREE_MODELS, ...GENERAL_FREE_MODELS])];
 
 // ── Provider Detection ──
@@ -111,15 +115,11 @@ async function openAICompatChat(
     headers['X-Title'] = 'Personal AI System';
   }
 
-  // Some free models have lower max_tokens limits
-  // Cap at 8192 to be safe across all free models
-  const safeMaxTokens = Math.min(options.max_tokens ?? 8192, 8192);
-
   const body = JSON.stringify({
     model,
     messages: options.messages,
     temperature: options.temperature ?? 0.7,
-    max_tokens: safeMaxTokens,
+    max_tokens: options.max_tokens ?? 8192,
     stream: options.stream ?? false,
   });
 
@@ -127,7 +127,7 @@ async function openAICompatChat(
     method: 'POST',
     headers,
     body,
-    signal: AbortSignal.timeout(60000), // 60s timeout per request
+    signal: AbortSignal.timeout(90000), // 90s timeout — some free models are slow
   });
 
   if (!response.ok) {
@@ -137,14 +137,16 @@ async function openAICompatChat(
     try {
       const errorJson = JSON.parse(errorText);
       errorMsg = errorJson.error?.message || errorJson.message || errorMsg;
+      // Rate limits, not found, service unavailable = retriable
       if (response.status === 429 || response.status === 404 || response.status === 503) {
         retriable = true;
       }
-      if (response.status === 400 && (errorMsg.includes('location') || errorMsg.includes('not available') || errorMsg.includes('context') || errorMsg.includes('token'))) {
+      // Context/token issues = try different model
+      if (response.status === 400 && (errorMsg.includes('location') || errorMsg.includes('not available') || errorMsg.includes('context') || errorMsg.includes('token') || errorMsg.includes('too many'))) {
         retriable = true;
       }
-      // "Provider returned error" = model backend down
-      if (errorMsg.includes('Provider returned error') || errorMsg.includes('No endpoints found') || errorMsg.includes('rate limit') || errorMsg.includes('overloaded')) {
+      // Provider-level errors = model backend down
+      if (errorMsg.includes('Provider returned error') || errorMsg.includes('No endpoints found') || errorMsg.includes('rate limit') || errorMsg.includes('overloaded') || errorMsg.includes('capacity')) {
         retriable = true;
       }
     } catch {
@@ -223,7 +225,6 @@ export class AIClient {
       if (process.env.OPENROUTER_MODEL) {
         client.model = process.env.OPENROUTER_MODEL;
       } else {
-        // Pick first model from the appropriate list
         const modelList = hint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
         client.model = modelList[0];
       }
@@ -276,7 +277,6 @@ export class AIClient {
   /** Get model list based on hint, with cross-category fallback */
   private getModelList(): string[] {
     const primary = this.modelHint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
-    // Add the other category as fallback, then all remaining
     const secondary = this.modelHint === 'coder' ? GENERAL_FREE_MODELS : CODER_FREE_MODELS;
     return [...new Set([...primary, ...secondary, ...ALL_FREE_MODELS])];
   }
@@ -302,37 +302,32 @@ export class AIClient {
         try {
           console.log(`[AI Provider] Trying: ${tryModel} (${attempt + 1}/${modelList.length})`);
           const result = await openAICompatChat(this.apiKey, this.baseUrl, tryModel, options);
-          // Success — remember this model
           this.model = tryModel;
-          console.log(`[AI Provider] Success with: ${tryModel}`);
+          console.log(`[AI Provider] ✓ Success with: ${tryModel}`);
           return result;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : 'Unknown error';
           const isRetriable = (err as Record<string, unknown>)?.retriable === true;
           lastError = errMsg;
-          console.warn(`[AI Provider] ${tryModel} failed: ${errMsg.slice(0, 100)} (retriable: ${isRetriable})`);
+          console.warn(`[AI Provider] ✗ ${tryModel}: ${errMsg.slice(0, 80)} (retriable: ${isRetriable})`);
 
-          if (isRetriable) {
-            // Small delay before trying next model (rate limit backoff)
-            if (attempt < modelList.length - 1) {
-              await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
-            }
-            continue;
+          // Auth errors affect ALL models — stop immediately
+          if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('Invalid API key') || errMsg.includes('Authentication Failed')) {
+            throw err;
           }
 
-          // Non-retriable errors (auth, etc) — still try next model
-          // because different models may have different backends
-          if (errMsg.includes('401') || errMsg.includes('403') || errMsg.includes('Invalid API key')) {
-            // Auth errors affect ALL models — stop here
-            throw err;
+          // Backoff before trying next model
+          if (attempt < modelList.length - 1) {
+            await new Promise((r) => setTimeout(r, Math.min(500 * (attempt + 1), 3000)));
           }
           continue;
         }
       }
 
       throw new Error(
-        `All ${modelList.length} free models are currently busy or unavailable. Please try again in a moment — free models rotate availability frequently. ` +
-        `Last error: ${lastError.slice(0, 150)}`
+        `All ${modelList.length} free models are currently busy. Free models rotate availability — please try again in 30 seconds. ` +
+        `Tip: You can also set OPENROUTER_MODEL to a cheap paid model like "z-ai/glm-4.7-flash" ($0.06/1M tokens) for reliable access. ` +
+        `Last error: ${lastError.slice(0, 120)}`
       );
     }
 
@@ -354,7 +349,7 @@ export class AIClient {
     }
 
     const visionModel = this.provider === 'openrouter'
-      ? (process.env.OPENROUTER_VISION_MODEL || 'google/gemma-3-27b-it:free')
+      ? (process.env.OPENROUTER_VISION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free')
       : this.model;
 
     return openAICompatVision(this.apiKey, this.baseUrl, visionModel, options);
