@@ -53,3 +53,31 @@ Stage Summary:
 - Code blocks in messages now show View, Download, and Copy buttons
 - Message action bar now includes Download and View-in-new-window buttons
 - Files modified: preview-panel.tsx, page.tsx, chat-panel.tsx, message-renderer.tsx, globals.css
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix poor AI response quality - add 227 skills and 47 agents context to system prompt, smart model selection for coding
+
+Work Log:
+- Investigated current codebase: system prompt was very basic (just "You are Z"), no skills/agents catalog in prompt
+- Found that auto-routing only had 7 hardcoded skill shortcuts and fell through to "general" often
+- Found that free models weren't matched to task type (coding should use qwen3-coder)
+- Found that skill content was truncated at 6000 chars and only loaded when explicitly matched
+- Rewrote buildSystemPrompt() to include complete skills/agents catalog in base prompt
+- Added 15+ detailed skill-specific instruction blocks (code-review, tdd, architect, security, planner, writer, researcher, fullstack-dev, python-patterns, rust-patterns, golang-patterns, frontend-patterns, backend-patterns)
+- Increased skill content limit from 6000 to 8000 chars
+- Added smart model selection: 'auto' hint uses general models, 'coder' hint uses qwen/qwen3-coder:free
+- Added ModelHint type ('auto' | 'coder') to AIClient
+- Added separate model lists: GENERAL_FREE_MODELS and CODER_FREE_MODELS
+- Improved auto-routing with 20+ keyword patterns for language-specific detection
+- Added isCodingMessage() helper for broad coding detection
+- Auto-route now returns modelHint alongside route info
+- Built successfully and pushed to GitHub (commit 5ff7e1e)
+- Vercel auto-deploy triggered
+
+Stage Summary:
+- System prompt now includes full 227 skills catalog and 47 agents catalog
+- Coding tasks auto-routed to qwen/qwen3-coder:free for better code quality
+- Non-coding tasks use openrouter/free for general chat
+- Auto-routing expanded from 7 to 20+ keyword patterns including language detection
+- Each skill has detailed instruction block for production-quality output
