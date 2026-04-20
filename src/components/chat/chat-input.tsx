@@ -192,7 +192,7 @@ async function safeFetchJSON(url: string, options: RequestInit): Promise<Record<
 }
 
 export function ChatInput() {
-  const { messages, addMessage, isLoading, setIsLoading, activeConversationId } = useChatStore();
+  const { messages, addMessage, isLoading, setIsLoading, activeConversationId, activeSkill, activeAgent, setActiveSkill, setActiveAgent } = useChatStore();
   const [input, setInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
@@ -234,6 +234,12 @@ export function ChatInput() {
     setInput('');
     setAttachedImage(null);
     setIsLoading(true);
+
+    // Clear active skill/agent after sending (they're one-shot)
+    const sentSkill = activeSkill;
+    const sentAgent = activeAgent;
+    if (sentSkill) setActiveSkill(null);
+    if (sentAgent) setActiveAgent(null);
 
     try {
       const lowerContent = content.toLowerCase();
@@ -282,9 +288,14 @@ export function ChatInput() {
           }
         }
 
+        // Include active skill/agent if selected from sidebar
+        const chatBody: Record<string, unknown> = { messages: chatMsgs, conversationId: activeConversationId, stream: true };
+        if (activeSkill) chatBody.skill = activeSkill.id;
+        if (activeAgent) chatBody.agent = activeAgent.id;
+
         await streamChat(
           '/api/chat',
-          { messages: chatMsgs, conversationId: activeConversationId, stream: true },
+          chatBody,
           (chunk) => {
             appendToLastMsg(chunk);
           },
@@ -423,6 +434,18 @@ export function ChatInput() {
       )}
 
       <div className="px-4 pt-2 pb-1 flex items-center gap-2 flex-wrap">
+        {activeSkill && (
+          <Badge variant="secondary" className="gap-1 bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20">
+            <Zap className="w-3 h-3" />
+            Skill: {activeSkill.name}
+          </Badge>
+        )}
+        {activeAgent && (
+          <Badge variant="secondary" className="gap-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20">
+            <Brain className="w-3 h-3" />
+            Agent: {activeAgent.name}
+          </Badge>
+        )}
         {autoRouteLabel && (
           <Badge variant="secondary" className="gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
             <Zap className="w-3 h-3" />

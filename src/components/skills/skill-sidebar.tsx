@@ -282,7 +282,7 @@ export function SkillSidebar() {
         </div>
       </div>
 
-      {/* Detail Panel (shows when item is selected for info) */}
+      {/* Detail Panel (shows when item is selected — with ACTIVATE button) */}
       {selectedItem && selectedUsage && (
         <div className="mx-3 mb-1 p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 animate-message-in">
           <div className="flex items-center justify-between mb-2">
@@ -302,8 +302,31 @@ export function SkillSidebar() {
               <ArrowRight className="w-3 h-3 text-blue-500 mt-0.5 shrink-0" />
               <p className="text-[11px] text-muted-foreground leading-relaxed italic">&quot;{selectedUsage.example}&quot;</p>
             </div>
+            {/* ACTIVATE button — sets skill/agent for next message */}
+            <Button
+              size="sm"
+              className="w-full mt-2 h-7 text-[11px] bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white"
+              onClick={() => {
+                if (selectedItem.type === 'skill' && selectedSkill) {
+                  setActiveSkill(activeSkill?.id === selectedSkill.id ? null : selectedSkill);
+                } else if (selectedItem.type === 'agent' && selectedAgent) {
+                  setActiveAgent(activeAgent?.id === selectedAgent.id ? null : selectedAgent);
+                }
+              }}
+            >
+              <Zap className="w-3 h-3 mr-1" />
+              {((selectedItem.type === 'skill' && activeSkill?.id === selectedItem.id) ||
+                (selectedItem.type === 'agent' && activeAgent?.id === selectedItem.id))
+                ? 'Deactivate'
+                : `Activate this ${selectedItem.type === 'skill' ? 'Skill' : 'Agent'}`
+              }
+            </Button>
             <p className="text-[10px] text-muted-foreground mt-1 px-1">
-              Just type your request and I'll automatically use this {selectedItem.type} when it's the best match.
+              {((selectedItem.type === 'skill' && activeSkill?.id === selectedItem.id) ||
+                (selectedItem.type === 'agent' && activeAgent?.id === selectedItem.id))
+                ? `This ${selectedItem.type} is active! Type your message to use it.`
+                : `Or just type your request — I'll auto-detect the best ${selectedItem.type}.`
+              }
             </p>
           </div>
         </div>
@@ -336,6 +359,7 @@ export function SkillSidebar() {
                       {cat.skills.map((skill: Skill, idx: number) => {
                         const Icon = ICONS[skill.icon] || MessageSquare;
                         const isSelected = selectedItem?.id === skill.id;
+                        const isActive = activeSkill?.id === skill.id;
                         return (
                           <div key={skill.id} className="group relative">
                             <div
@@ -347,7 +371,9 @@ export function SkillSidebar() {
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedItem(selectedItem?.id === skill.id ? null : { type: 'skill', id: skill.id }); } }}
                               className={cn(
                                 'w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 cursor-pointer',
-                                selectedItem?.id === skill.id
+                                isActive
+                                  ? 'bg-violet-500/15 text-violet-600 dark:text-violet-400 shadow-sm ring-1 ring-violet-500/30 scale-[1.02]'
+                                  : isSelected
                                   ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-sm scale-[1.02]'
                                   : 'hover:bg-accent hover:scale-[1.01] hover:shadow-sm',
                                 isExpanded && 'sidebar-item-stagger'
@@ -416,6 +442,7 @@ export function SkillSidebar() {
                     <div className="space-y-0.5 ml-1">
                       {cat.agents.map((agent: Agent, idx: number) => {
                         const isSelected = selectedItem?.id === agent.id;
+                        const isActive = activeAgent?.id === agent.id;
                         const modelColor = agent.model === 'opus' ? 'text-purple-500' : agent.model === 'haiku' ? 'text-blue-500' : 'text-emerald-500';
                         return (
                           <div key={agent.id} className="group relative">
@@ -428,7 +455,9 @@ export function SkillSidebar() {
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedItem(isSelected ? null : { type: 'agent', id: agent.id }); } }}
                               className={cn(
                                 'w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 cursor-pointer',
-                                isSelected
+                                isActive
+                                  ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 shadow-sm ring-1 ring-blue-500/30 scale-[1.02]'
+                                  : isSelected
                                   ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shadow-sm scale-[1.02]'
                                   : 'hover:bg-accent hover:scale-[1.01] hover:shadow-sm',
                                 isExpanded && 'sidebar-item-stagger'
