@@ -9,6 +9,10 @@
  *
  * OpenRouter has free models: https://openrouter.ai/models?q=free
  * Get a free key at: https://openrouter.ai/keys
+ *
+ * Model Hints:
+ *  - 'auto': Use general-purpose free models (openrouter/free, arcee-ai/trinity)
+ *  - 'coder': Prefer code-optimized models (qwen/qwen3-coder:free)
  */
 
 // ── Types ──
@@ -30,16 +34,26 @@ export interface ChatCompletionResponse {
 }
 
 export type AIProvider = 'zai' | 'openrouter' | 'openai';
+export type ModelHint = 'auto' | 'coder';
 
-// ── Free model fallback list (OpenRouter) ──
+// ── Free model lists (OpenRouter) ──
 // Tested and verified to work (April 2026)
-// "openrouter/free" auto-routes to available models — most reliable
-const OPENROUTER_FREE_MODELS = [
+
+// General-purpose models — good for chat, writing, research
+const GENERAL_FREE_MODELS = [
   'openrouter/free',                                 // Auto-route to best available free model
   'arcee-ai/trinity-large-preview:free',             // Fast, reliable
   'openai/gpt-oss-120b:free',                        // OpenAI open-source model
   'meta-llama/llama-3.3-70b-instruct:free',          // May be rate-limited at times
-  'qwen/qwen3-coder:free',                           // Good for code
+];
+
+// Code-optimized models — better for programming tasks
+const CODER_FREE_MODELS = [
+  'qwen/qwen3-coder:free',                           // Best free model for code
+  'openrouter/free',                                  // Fallback to auto-route
+  'arcee-ai/trinity-large-preview:free',             // Fast fallback
+  'openai/gpt-oss-120b:free',                        // OpenAI open-source fallback
+  'meta-llama/llama-3.3-70b-instruct:free',          // Last resort
 ];
 
 // ── Provider Detection ──
@@ -186,20 +200,29 @@ export class AIClient {
   private baseUrl = '';
   private model = '';
   private modelIndex = 0; // For free model fallback
+  private modelHint: ModelHint = 'auto';
 
-  private constructor(provider: AIProvider) {
+  private constructor(provider: AIProvider, hint: ModelHint = 'auto') {
     this.provider = provider;
+    this.modelHint = hint;
   }
 
-  static async create(): Promise<AIClient> {
+  static async create(hint: ModelHint = 'auto'): Promise<AIClient> {
     const { provider, hasKey } = detectProvider();
-    const client = new AIClient(provider);
+    const client = new AIClient(provider, hint);
 
     if (provider === 'openrouter') {
       client.apiKey = process.env.OPENROUTER_API_KEY!;
       client.baseUrl = 'https://openrouter.ai/api/v1';
-      // User can override with OPENROUTER_MODEL, otherwise use first free model
-      client.model = process.env.OPENROUTER_MODEL || OPENROUTER_FREE_MODELS[0];
+      // User can override with OPENROUTER_MODEL, otherwise select based on hint
+      if (process.env.OPENROUTER_MODEL) {
+        client.model = process.env.OPENROUTER_MODEL;
+      } else if (hint === 'coder') {
+        client.model = CODER_FREE_MODELS[0]; // qwen/qwen3-coder:free
+        console.log(`[AI Provider] Coder hint → using ${client.model}`);
+      } else {
+        client.model = GENERAL_FREE_MODELS[0]; // openrouter/free
+      }
     } else if (provider === 'openai') {
       client.apiKey = process.env.OPENAI_API_KEY!;
       client.baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
@@ -224,7 +247,7 @@ export class AIClient {
           client.provider = 'openrouter';
           client.apiKey = orKey;
           client.baseUrl = 'https://openrouter.ai/api/v1';
-          client.model = process.env.OPENROUTER_MODEL || OPENROUTER_FREE_MODELS[0];
+          client.model = process.env.OPENROUTER_MODEL || (hint === 'coder' ? CODER_FREE_MODELS[0] : GENERAL_FREE_MODELS[0]);
           process.env.OPENROUTER_API_KEY = orKey;
         } else if (process.env.OPENAI_API_KEY) {
           client.provider = 'openai';
@@ -239,7 +262,7 @@ export class AIClient {
       }
     }
 
-    console.log(`[AI Provider] Using: ${client.provider} / ${client.model || 'glm'}`);
+    console.log(`[AI Provider] Using: ${client.provider} / ${client.model} (hint: ${hint})`);
     return client;
   }
 
@@ -249,6 +272,11 @@ export class AIClient {
 
   get modelName(): string {
     return this.model || 'glm';
+  }
+
+  /** Get the model list based on current hint */
+  private getModelList(): string[] {
+    return this.modelHint === 'coder' ? CODER_FREE_MODELS : GENERAL_FREE_MODELS;
   }
 
   /** Chat completion — streaming or non-streaming, with automatic model fallback for free tier */
@@ -264,10 +292,11 @@ export class AIClient {
 
     // For OpenRouter free models: try fallback models if primary fails
     if (this.provider === 'openrouter' && !process.env.OPENROUTER_MODEL) {
+      const modelList = this.getModelList();
       const startIndex = this.modelIndex;
-      for (let attempt = 0; attempt < OPENROUTER_FREE_MODELS.length; attempt++) {
-        const idx = (startIndex + attempt) % OPENROUTER_FREE_MODELS.length;
-        const tryModel = OPENROUTER_FREE_MODELS[idx];
+      for (let attempt = 0; attempt < modelList.length; attempt++) {
+        const idx = (startIndex + attempt) % modelList.length;
+        const tryModel = modelList[idx];
         try {
           console.log(`[AI Provider] Trying model: ${tryModel} (attempt ${attempt + 1})`);
           const result = await openAICompatChat(this.apiKey, this.baseUrl, tryModel, options);
