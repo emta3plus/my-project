@@ -43,7 +43,7 @@ const OPENROUTER_FREE_MODELS = [
 ];
 
 // ── Provider Detection ──
-// Priority: OpenRouter (free) > OpenAI > Z.ai (needs credits)
+// Priority: OpenRouter (free) > OpenAI > Z.ai (needs credits on public API)
 // Auto-detect OpenRouter keys even if put in OPENAI_API_KEY field
 export function detectProvider(): { provider: AIProvider; hasKey: boolean } {
   if (process.env.OPENROUTER_API_KEY) return { provider: 'openrouter', hasKey: true };
@@ -58,7 +58,20 @@ export function detectProvider(): { provider: AIProvider; hasKey: boolean } {
   }
   
   if (openaiKey) return { provider: 'openai', hasKey: true };
-  if (process.env.ZAI_API_KEY) return { provider: 'zai', hasKey: true };
+  
+  // Z.ai public API requires paid credits — skip if we have no credits
+  // (sandbox environment works via .z-ai-config file, not env vars)
+  if (process.env.ZAI_API_KEY) {
+    const zaiBaseUrl = process.env.ZAI_BASE_URL || '';
+    // Only use ZAI if it's pointing to the sandbox internal API (which is free)
+    if (zaiBaseUrl.includes('172.') || zaiBaseUrl.includes('localhost') || zaiBaseUrl.includes('127.0.0.1')) {
+      return { provider: 'zai', hasKey: true };
+    }
+    // Public Z.ai API requires credits — skip it, return no provider
+    console.warn('[AI Provider] Z.ai public API requires credits. Set OPENROUTER_API_KEY for free models.');
+    return { provider: 'zai', hasKey: false };
+  }
+  
   return { provider: 'zai', hasKey: false };
 }
 
@@ -179,7 +192,7 @@ export class AIClient {
   }
 
   static async create(): Promise<AIClient> {
-    const { provider } = detectProvider();
+    const { provider, hasKey } = detectProvider();
     const client = new AIClient(provider);
 
     if (provider === 'openrouter') {
@@ -192,16 +205,27 @@ export class AIClient {
       client.baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
       client.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
     } else if (provider === 'zai') {
+      if (!hasKey) {
+        // Z.ai public API has no credits — provide a clear error with alternatives
+        throw new Error(
+          'Z.ai API requires credits for public access. For free AI chat, set OPENROUTER_API_KEY (get a free key at https://openrouter.ai/keys). ' +
+          'Your OpenRouter key (sk-or-v1-...) should be set as OPENROUTER_API_KEY or OPENAI_API_KEY on Vercel.'
+        );
+      }
       const { getZAI } = await import('@/lib/zai');
       try {
         client.zai = await getZAI();
-      } catch {
-        // Z.ai SDK failed — try OpenRouter fallback
-        if (process.env.OPENROUTER_API_KEY) {
+      } catch (zaiErr) {
+        const errMsg = zaiErr instanceof Error ? zaiErr.message : 'Unknown ZAI error';
+        console.error(`[AI Provider] ZAI init failed: ${errMsg}`);
+        // Z.ai SDK failed — try fallback providers
+        const orKey = process.env.OPENROUTER_API_KEY || (process.env.OPENAI_API_KEY?.startsWith('sk-or-v1-') ? process.env.OPENAI_API_KEY : '');
+        if (orKey) {
           client.provider = 'openrouter';
-          client.apiKey = process.env.OPENROUTER_API_KEY;
+          client.apiKey = orKey;
           client.baseUrl = 'https://openrouter.ai/api/v1';
           client.model = process.env.OPENROUTER_MODEL || OPENROUTER_FREE_MODELS[0];
+          process.env.OPENROUTER_API_KEY = orKey;
         } else if (process.env.OPENAI_API_KEY) {
           client.provider = 'openai';
           client.apiKey = process.env.OPENAI_API_KEY;
@@ -209,10 +233,7 @@ export class AIClient {
           client.model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
         } else {
           throw new Error(
-            'No AI provider configured. Set one of:\n' +
-            '  - OPENROUTER_API_KEY (free models! Get one at https://openrouter.ai/keys)\n' +
-            '  - OPENAI_API_KEY (OpenAI or compatible API)\n' +
-            '  - ZAI_API_KEY (Z.ai platform)'
+            `Z.ai failed (${errMsg}). Set OPENROUTER_API_KEY for free models at https://openrouter.ai/keys`
           );
         }
       }
