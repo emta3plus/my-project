@@ -1,24 +1,34 @@
 import { NextResponse } from 'next/server';
-import { detectProvider } from '@/lib/ai-provider';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const { provider, hasKey } = detectProvider();
-  
+  const zaiKey = process.env.ZAI_API_KEY;
+  const zaiBaseUrl = process.env.ZAI_BASE_URL;
+
+  // Try to init Z.ai to check if it works
+  let zaiStatus = 'not tested';
+  try {
+    const { getZAI } = await import('@/lib/zai');
+    const zai = await getZAI();
+    zaiStatus = zai ? 'connected' : 'failed';
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    zaiStatus = `error: ${msg.slice(0, 100)}`;
+  }
+
   const envStatus = {
-    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY ? `set (${process.env.OPENROUTER_API_KEY.slice(0, 10)}...)` : 'not set',
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY ? `set (${process.env.OPENAI_API_KEY.slice(0, 10)}...)` : 'not set',
-    ZAI_API_KEY: process.env.ZAI_API_KEY ? `set (${process.env.ZAI_API_KEY.slice(0, 10)}...)` : 'not set',
-    ZAI_BASE_URL: process.env.ZAI_BASE_URL || 'not set',
+    ZAI_API_KEY: zaiKey ? `set (${zaiKey.slice(0, 10)}...)` : 'not set (using config file)',
+    ZAI_BASE_URL: zaiBaseUrl || 'not set (using default)',
   };
 
   return NextResponse.json({
-    provider,
-    hasKey,
+    provider: 'zai',
+    model: 'glm-4-plus',
+    zaiStatus,
     envStatus,
-    recommendation: !hasKey 
-      ? 'No AI provider configured! Set OPENROUTER_API_KEY on Vercel for free models.' 
-      : `Using ${provider} provider.`,
+    recommendation: zaiStatus === 'connected'
+      ? 'Z.ai is connected and ready!'
+      : 'Z.ai not connected. Set ZAI_API_KEY env var. Get key at: https://z.ai/manage-apikey/apikey-list',
   });
 }

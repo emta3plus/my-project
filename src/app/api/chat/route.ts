@@ -831,8 +831,6 @@ export async function POST(req: NextRequest) {
         let skill = explicitSkill || undefined;
         let agent = explicitAgent || undefined;
         let routeName = '';
-        let routeModelHint: 'auto' | 'coder' = 'auto';
-
         if (!skill && !agent) {
           const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
           if (lastUserMsg) {
@@ -844,15 +842,8 @@ export async function POST(req: NextRequest) {
               agent = routeResult.route;
               routeName = routeResult.name;
             }
-            routeModelHint = routeResult.modelHint;
           }
         } else {
-          // Explicit skill/agent — check if coding-related for model hint
-          const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user');
-          if (lastUserMsg) {
-            const routeResult = fastRoute(lastUserMsg.content);
-            routeModelHint = routeResult.modelHint;
-          }
           // Set route name for explicit selection
           if (skill) {
             const skillObj = SKILLS.find(s => s.id === skill);
@@ -882,8 +873,8 @@ export async function POST(req: NextRequest) {
         // ── 5. Get AI completion ──
         sse(controller, { status: 'generating', content: '', done: false });
 
-        const ai = await AIClient.create(routeModelHint);
-        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Z.ai: ${ai.isZai}, Skill: ${skill || agent || 'general'}`);
+        const ai = await AIClient.create();
+        console.log(`[Chat] Provider: ${ai.providerName}, Model: ${ai.modelName}, Skill: ${skill || agent || 'general'}`);
 
         let completion: unknown = null;
         try {
@@ -891,19 +882,17 @@ export async function POST(req: NextRequest) {
             messages: apiMessages,
             temperature: 0.7,
             max_tokens: 8192,
-            stream: !ai.isZai,
+            stream: false,
           });
         } catch (apiErr) {
           const errMsg = apiErr instanceof Error ? apiErr.message : 'API request failed';
           console.error(`[Chat] API error: ${errMsg}`);
 
           let userMsg = errMsg;
-          if (errMsg.includes('All providers exhausted') || (errMsg.includes('All') && errMsg.includes('busy'))) {
-            userMsg = 'All AI providers are busy or rate-limited. Please try again in a moment.';
-          } else if (errMsg.includes('Rate limit exceeded') || errMsg.includes('free-models-per-day')) {
-            userMsg = 'Daily limit reached. Please try again tomorrow or add an API key.';
-          } else if (errMsg.includes('No AI providers configured')) {
-            userMsg = 'No AI providers configured. Please add an API key in your settings.';
+          if (errMsg.includes('Z.ai is not configured')) {
+            userMsg = 'Z.ai is not configured. Set ZAI_API_KEY env var. Get key at: https://z.ai/manage-apikey/apikey-list';
+          } else if (errMsg.includes('Z.ai SDK not initialized')) {
+            userMsg = 'Z.ai SDK failed. Please check your ZAI_API_KEY env var.';
           }
 
           sse(controller, { error: userMsg, done: true });
@@ -917,10 +906,10 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // ── 6. Handle response (Z.ai non-streaming OR other providers streaming) ──
+        // ── 6. Handle response (Z.ai non-streaming) ──
 
         // Z.ai SDK returns a non-streaming JSON response
-        if (ai.isZai || (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream))) {
+        if (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream)) {
           const resp = completion as Record<string, unknown>;
           if (resp.error) {
             sse(controller, { error: `API error: ${JSON.stringify(resp.error)}`, done: true });
