@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getZAI } from '@/lib/zai';
+import { AIClient } from '@/lib/ai-provider';
 import { SKILLS } from '@/lib/skills';
 import { AGENTS } from '@/lib/agents';
 
@@ -64,8 +64,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Quick LLM classification call — fast and cheap
-    const zai = await getZAI();
-    const completion = await zai.chat.completions.create({
+    const ai = await AIClient.create();
+    const completion = await ai.chat({
       messages: [
         { role: 'system', content: CLASSIFIER_SYSTEM },
         { role: 'user', content: lastUserMsg.content.slice(0, 500) },

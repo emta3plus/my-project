@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { getZAI } from '@/lib/zai';
+import { AIClient } from '@/lib/ai-provider';
 import { db } from '@/lib/db';
 import { getSkillContent, getAgentContent } from '@/lib/skills-loader';
 import { SKILLS } from '@/lib/skills';
@@ -98,10 +98,10 @@ export async function POST(req: NextRequest) {
         // ── 5. Stream AI completion ──
         sse(controller, { status: 'generating', content: '', done: false });
 
-        const zai = await getZAI();
+        const ai = await AIClient.create();
         let completion: unknown = null;
         try {
-          completion = await zai.chat.completions.create({
+          completion = await ai.chat({
             messages: apiMessages,
             temperature: 0.7,
             max_tokens: 8192,
@@ -121,16 +121,14 @@ export async function POST(req: NextRequest) {
           return;
         }
 
-        // Handle non-streaming response (public API may return JSON instead of stream)
+        // Handle non-streaming JSON response (Z.ai public API may return JSON instead of stream)
         if (typeof completion === 'object' && completion !== null && !isAsyncIterable(completion) && !(completion instanceof ReadableStream)) {
           const resp = completion as Record<string, unknown>;
-          // Check if it's an error response
           if (resp.error) {
             sse(controller, { error: `API error: ${JSON.stringify(resp.error)}`, done: true });
             controller.close();
             return;
           }
-          // It's a valid non-streaming completion — send content directly
           const content = (resp.choices as Array<{message?: {content?: string}}>)?.[0]?.message?.content || '';
           fullContent = content;
           if (conversationId && fullContent) {
@@ -315,8 +313,8 @@ Rules:
 - For general conversation, casual chat, greetings, or unclear topics, reply: general
 - Default to "general" if uncertain`;
 
-    const zai = await getZAI();
-    const completion = await zai.chat.completions.create({
+    const ai = await AIClient.create();
+    const completion = await ai.chat({
       messages: [
         { role: 'system', content: classifierPrompt },
         { role: 'user', content: lastUserMsg.content.slice(0, 500) },
