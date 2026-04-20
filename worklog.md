@@ -112,3 +112,34 @@ Stage Summary:
 - max_tokens increased to 16384 so the AI can write complete code
 - Explicit instructions to never truncate code
 - Vercel auto-deploy triggered
+
+---
+Task ID: 7
+Agent: Main Agent
+Task: Make AI actually use ALL 227 skills + 47 agents
+
+Work Log:
+- Audited current skill integration: found only ~25 skills had instructions, 75+ got generic fallback
+- Discovered SKILL.md files (227!) were NEVER loaded into system prompt — skills-loader.ts existed but was unused
+- Discovered /api/skill-instructions endpoint existed but nobody called it
+- Only 9 of 47 agents had instruction templates, rest got generic fallback
+- Frontend never sent skill/agent in chat request body
+- Sidebar was informational only — clicking a skill didn't activate it
+
+- Rewrote route.ts with comprehensive fastRoute() covering 150+ keyword patterns across ALL categories
+- Made buildSystemPrompt() async to support dynamic SKILL.md loading from cache
+- Added extractSkillRules() for smart truncation (3000 char limit, preserves key sections)
+- All 227 skills now load their SKILL.md content when routed (fallback to hardcoded for top 20)
+- All 47 agents now load their .md content from cache (fallback to category-based instructions)
+- Updated chat-input.tsx to send activeSkill/activeAgent in request body
+- Added skill/agent badge display in chat input area
+- Added "Activate" button in skill sidebar detail panel
+- Active skills/agents shown with colored highlights in sidebar
+- Active skill/agent cleared after sending (one-shot behavior)
+
+Stage Summary:
+- ALL 227 skills now have domain-specific instructions (from SKILL.md cache)
+- ALL 47 agents now have specialized instructions (from agent .md cache)
+- 150+ keyword patterns cover every skill category
+- Frontend fully connected: sidebar → store → chat API
+- Deployed as commit 81090a6
